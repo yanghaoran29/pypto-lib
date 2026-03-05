@@ -7,15 +7,13 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 """
-Paged Attention: single orchestration with embedded InCore via with pl.incore()
+Paged Attention (pure tensor model + auto_incore scope).
 
-Same pipeline as paged_attention_example.py (QK matmul → softmax prepare → PV matmul
-→ online update) but all incore logic is inlined inside the orchestration using
-with pl.incore(): blocks instead of calling separate @pl.function(type=InCore) kernels.
+Based on pa3.py.  Uses pl.auto_incore() to explicitly mark the chunked loop
+nest for automatic splitting + interchange + incore outlining.
 
-Uses chunked loop syntax (para_for.md): batch and query-tile loops are chunked for
-parallel expansion (chunk loop + in_chunk loop); the KV-block loop (bn) stays
-sequential due to online softmax recurrence.
+Without this scope the SplitChunkedLoops and InterchangeChunkLoops passes
+will leave the chunked loops untouched.
 """
 
 import os
@@ -27,7 +25,6 @@ from pypto.backend import BackendType
 from pypto.ir.pass_manager import OptimizationStrategy
 from pypto.runtime import RunConfig, RunResult, TensorSpec, run
 
-# Tile sizes used inside incore blocks (must match views created in orchestration)
 Q_TILE = 16
 BLOCK_SIZE = 128
 HEAD_DIM = 128
@@ -41,16 +38,14 @@ def build_paged_attention_program(
     max_num_blocks_per_req: int,
     q_tile: int = Q_TILE,
 ):
-    """Build a parameterised paged-attention @pl.program with embedded incore blocks."""
+    """Build a parameterised paged-attention @pl.program (pure tensor model)."""
 
-    # Loop bounds and dimensions as constants (compile-time); enables chunked parallel loops
     BATCH_CFG = batch
     Q_LOOP_CFG = (num_heads + q_tile - 1) // q_tile
     Q_HEAD_NUM = num_heads
     BLOCK_NUM_CFG = max_num_blocks_per_req
     HEAD_DIM_CFG = head_dim
     BLOCK_SIZE_CFG = block_size
-    # Chunk sizes for chunked loops (bounds are now constants)
     BATCH_CHUNK = 8
     Q_CHUNK = 2
 
@@ -61,7 +56,7 @@ def build_paged_attention_program(
 
     @pl.program
     class PagedAttentionProgram:
-        """Paged attention: one orchestration, incore logic embedded via with pl.incore()."""
+        """Paged attention — pure tensor model with auto_incore scope."""
 
         @pl.function(type=pl.FunctionType.Opaque)
         def paged_attention(
@@ -77,40 +72,28 @@ def build_paged_attention_program(
             size_key_cache: pl.Tensor[[1], pl.INT64],
             size_value_cache: pl.Tensor[[1], pl.INT64],
         ) -> pl.Tensor[[out_rows, head_dim], pl.FP32]:
-            """Orchestration: chunked loops over batch and q_tile (constants); sequential bn; each stage in with pl.incore()."""
-            # Loop bounds and dimensions from pa.py constants (BATCH_CFG, Q_LOOP_CFG, etc.)
+            """Orchestration: auto_incore scope marks the chunked loops for splitting + interchange."""
 
-            # Chunked loop over batch: pl.parallel, chunk → expansion (bounds are compile-time constants)
-            for b_idx in pl.parallel(0, BATCH_CFG, 1, chunk=BATCH_CHUNK):
-                #with pl.incore():
-                    cur_seq = pl.tensor.read(context_lens, [b_idx])
-                    bn_this_batch = (cur_seq + BLOCK_SIZE_CFG - 1) // BLOCK_SIZE_CFG
-                    # Chunked loop over query-tile groups: pl.parallel, chunk → expansion
+            with pl.auto_incore():
+                for b_idx in pl.parallel(0, BATCH_CFG, 1, chunk=BATCH_CHUNK):
                     for q_idx in pl.parallel(0, Q_LOOP_CFG, 1, chunk=Q_CHUNK):
+                        cur_seq = pl.tensor.read(context_lens, [b_idx])
+                        bn_this_batch = (cur_seq + BLOCK_SIZE_CFG - 1) // BLOCK_SIZE_CFG
                         cur_offset = b_idx * Q_HEAD_NUM + q_idx * q_tile
 
+                        # ── Initialise accumulators ──────────────────────
                         oi: pl.Tensor[[q_tile, HEAD_DIM_CFG], pl.FP32] = pl.create_tensor(
-                            [q_tile, HEAD_DIM_CFG],
-                            dtype=pl.FP32,
+                            [Q_TILE, HEAD_DIM], dtype=pl.FP32
                         )
                         li_update: pl.Tensor[[q_tile, 1], pl.FP32] = pl.create_tensor(
-                            [q_tile, 1], dtype=pl.FP32
+                            [Q_TILE, 1], dtype=pl.FP32
                         )
                         mi_update: pl.Tensor[[q_tile, 1], pl.FP32] = pl.create_tensor(
-                            [q_tile, 1], dtype=pl.FP32
+                            [Q_TILE, 1], dtype=pl.FP32
                         )
 
-
-                        zero_oi = pl.block.full([Q_TILE, HEAD_DIM], dtype=pl.FP32, value=0.0)
-                        zero_li = pl.block.full([Q_TILE, 1], dtype=pl.FP32, value=0.0)
-                        zero_mi = pl.block.full([Q_TILE, 1], dtype=pl.FP32, value=0.0)
-                        pl.store(zero_oi, [0, 0], [Q_TILE, HEAD_DIM], oi)
-                        pl.store(zero_li, [0, 0], [Q_TILE, 1], li_update)
-                        pl.store(zero_mi, [0, 0], [Q_TILE, 1], mi_update)
-
-                        # Sequential loop over KV blocks (no parallel): online softmax has loop-carried
-                        # dependency (mi_update, li_update, oi depend on previous bn); order must be preserved.
                         for bn in pl.range(bn_this_batch):
+                            # ── Sub-tensor views for input data ──────────
                             qi: pl.Tensor[[q_tile, HEAD_DIM_CFG], pl.BF16] = pl.view(
                                 query, [q_tile, HEAD_DIM_CFG], [cur_offset, 0]
                             )
@@ -128,77 +111,37 @@ def build_paged_attention_program(
                                 value_cache, [BLOCK_SIZE_CFG, HEAD_DIM_CFG], [kv_block_row, 0]
                             )
 
-                            sij: pl.Tensor[[q_tile, BLOCK_SIZE_CFG], pl.FP32] = pl.create_tensor(
-                                [q_tile, BLOCK_SIZE_CFG], dtype=pl.FP32
-                            )
-
-                            # ── QK matmul (embedded incore) ─────────────────────────
-
-                            qi_l1 = pl.load(
-                                qi, [0, 0], [Q_TILE, HEAD_DIM], target_memory=pl.MemorySpace.Mat
-                            )
-                            kj_l1 = pl.load(
-                                kj, [0, 0], [BLOCK_SIZE, HEAD_DIM], target_memory=pl.MemorySpace.Mat
-                            )
-                            qi_l0a = pl.move(qi_l1, target_memory=pl.MemorySpace.Left)
-                            kj_l0b = pl.move(
-                                kj_l1, target_memory=pl.MemorySpace.Right, transpose=True
-                            )
-                            sij_l0c = pl.matmul(qi_l0a, kj_l0b)
-                            pl.l0c_store(sij_l0c, [0, 0], [Q_TILE, BLOCK_SIZE], sij)
+                            # ── QK matmul: sij = qi @ kj^T ──────────────
+                            sij = pl.matmul(qi, kj, b_trans=True)
 
                             sij_valid: pl.Tensor[[q_tile, valid_len], pl.FP32] = pl.view(
                                 sij, [q_tile, valid_len], [0, 0]
                             )
 
-                            pij_f16: pl.Tensor[[q_tile, BLOCK_SIZE_CFG], pl.BF16] = pl.create_tensor(
-                                [q_tile, BLOCK_SIZE_CFG], dtype=pl.BF16
-                            )
-                            mi: pl.Tensor[[q_tile, 1], pl.FP32] = pl.create_tensor(
-                                [q_tile, 1], dtype=pl.FP32
-                            )
-                            li: pl.Tensor[[q_tile, 1], pl.FP32] = pl.create_tensor(
-                                [q_tile, 1], dtype=pl.FP32
-                            )
-
-                            # ── Softmax prepare (embedded incore) ───────────────────
-                            # Uses valid_len for the slice extent when loading/storing sij_valid.
-
+                            # ── Softmax prepare ──────────────────────────
                             scale = 1.0
-                            s_tile = pl.load(
-                                sij_valid, [0, 0], [Q_TILE, valid_len], target_memory=pl.MemorySpace.Vec
-                            )
-                            scaled = pl.mul(s_tile, scale)
-                            tmp_tile = pl.create_tile(
-                                [Q_TILE, BLOCK_SIZE], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec
-                            )
-                            mi_tile = pl.row_max(scaled, tmp_tile)
-                            sij_centered = pl.row_expand_sub(scaled, mi_tile)
-                            exp_tile = pl.exp(sij_centered)
-                            pij_tile_bf16 = pl.cast(exp_tile, target_type=pl.BF16)
-                            pij_tile = pl.cast(pij_tile_bf16, target_type=pl.FP32)
-                            li_tile = pl.row_sum(pij_tile, tmp_tile)
-                            pl.store(pij_tile_bf16, [0, 0], [Q_TILE, valid_len], pij_f16)
-                            pl.store(mi_tile, [0, 0], [Q_TILE, 1], mi)
-                            pl.store(li_tile, [0, 0], [Q_TILE, 1], li)
+                            scaled = pl.mul(sij_valid, scale)
+                            mi = pl.row_max(scaled)
+                            sij_centered = pl.sub(scaled, mi)
+                            exp_vals = pl.exp(sij_centered)
+                            pij_bf16 = pl.cast(exp_vals, target_type=pl.BF16)
+                            pij = pl.cast(pij_bf16, target_type=pl.FP32)
+                            li = pl.row_sum(pij)
 
-                            oi_tmp: pl.Tensor[[q_tile, HEAD_DIM_CFG], pl.FP32] = pl.create_tensor(
-                                [q_tile, HEAD_DIM_CFG], dtype=pl.FP32
+                            # Zero-pad pij to full BLOCK_SIZE for PV matmul
+                            pij_f16: pl.Tensor[[q_tile, BLOCK_SIZE_CFG], pl.BF16] = pl.create_tensor(
+                                [Q_TILE, BLOCK_SIZE], dtype=pl.BF16
+                            )
+                            pij_f16 = pl.assemble(
+                                pij_f16,
+                                pij_bf16,
+                                [0, 0],
                             )
 
-                            # ── PV matmul (embedded incore) ─────────────────────────
+                            # ── PV matmul: oi_tmp = pij @ vj ────────────
+                            oi_tmp = pl.matmul(pij_f16, vj)
 
-                            pij_l1 = pl.load(
-                                pij_f16, [0, 0], [Q_TILE, BLOCK_SIZE], target_memory=pl.MemorySpace.Mat
-                            )
-                            vj_l1 = pl.load(
-                                vj, [0, 0], [BLOCK_SIZE, HEAD_DIM], target_memory=pl.MemorySpace.Mat
-                            )
-                            pij_l0a = pl.move(pij_l1, target_memory=pl.MemorySpace.Left)
-                            vj_l0b = pl.move(vj_l1, target_memory=pl.MemorySpace.Right)
-                            oi_l0c = pl.matmul(pij_l0a, vj_l0b)
-                            pl.l0c_store(oi_l0c, [0, 0], [Q_TILE, HEAD_DIM], oi_tmp)
-
+                            # ── is_first / is_last flags ─────────────────
                             if bn == 0:
                                 is_first: pl.Scalar[pl.INT64] = pl.yield_(1)
                             else:
@@ -208,75 +151,57 @@ def build_paged_attention_program(
                             else:
                                 is_last = pl.yield_(0)
 
-                            out_view: pl.Tensor[[q_tile, HEAD_DIM_CFG], pl.FP32] = pl.view(
-                                out, [q_tile, HEAD_DIM_CFG], [cur_offset, 0]
-                            )
-
-                            # ── Online softmax update (embedded incore) ─────────────
-
-                            mij_tile = pl.load(
-                                mi, [0, 0], [Q_TILE, 1], target_memory=pl.MemorySpace.Vec
-                            )
-                            lij_tile = pl.load(
-                                li, [0, 0], [Q_TILE, 1], target_memory=pl.MemorySpace.Vec
-                            )
-                            oi_new_tile = pl.load(
-                                oi_tmp, [0, 0], [Q_TILE, HEAD_DIM], target_memory=pl.MemorySpace.Vec
-                            )
-                            mi_tile = pl.load(
-                                mi_update, [0, 0], [Q_TILE, 1], target_memory=pl.MemorySpace.Vec
-                            )
-                            li_tile = pl.load(
-                                li_update, [0, 0], [Q_TILE, 1], target_memory=pl.MemorySpace.Vec
-                            )
-                            oi_tile = pl.load(
-                                oi, [0, 0], [Q_TILE, HEAD_DIM], target_memory=pl.MemorySpace.Vec
-                            )
-
+                            # ── Online softmax update ────────────────────
                             if is_first:
-                                pl.store(mij_tile, [0, 0], [Q_TILE, 1], mi_update)
-                                pl.store(lij_tile, [0, 0], [Q_TILE, 1], li_update)
-                                pl.store(oi_new_tile, [0, 0], [Q_TILE, HEAD_DIM], oi)
+                                mi_update = mi
+                                li_update = li
+                                oi = oi_tmp
                                 if is_last:
-                                    dst_tile = pl.row_expand_div(oi_new_tile, lij_tile)
-                                    pl.store(dst_tile, [0, 0], [Q_TILE, HEAD_DIM], out_view)
+                                    dst = pl.div(oi_tmp, li)
+                                    out = pl.assemble(out, dst, [cur_offset, 0])
                                 else:
-                                    zero_tile = pl.block.full(
-                                        [Q_TILE, HEAD_DIM], dtype=pl.FP32, value=0.0
+                                    out_placeholder: pl.Tensor[[q_tile, HEAD_DIM_CFG], pl.FP32] = pl.create_tensor(
+                                        [Q_TILE, HEAD_DIM], dtype=pl.FP32
                                     )
-                                    pl.store(zero_tile, [0, 0], [Q_TILE, HEAD_DIM], out_view)
+                                    out = pl.assemble(
+                                        out,
+                                        out_placeholder,
+                                        [cur_offset, 0],
+                                    )
                             else:
-                                mi_tile_nd = pl.reshape(mi_tile, [1, Q_TILE])
-                                mij_tile_nd = pl.reshape(mij_tile, [1, Q_TILE])
-                                li_tile_nd = pl.reshape(li_tile, [1, Q_TILE])
-                                lij_tile_nd = pl.reshape(lij_tile, [1, Q_TILE])
-                                mi_new = pl.maximum(mi_tile_nd, mij_tile_nd)
-                                mi_diff = pl.sub(mi_tile_nd, mi_new)
+                                mi_prev_nd = pl.reshape(mi_update, [1, Q_TILE])
+                                mij_nd = pl.reshape(mi, [1, Q_TILE])
+                                li_prev_nd = pl.reshape(li_update, [1, Q_TILE])
+                                lij_nd = pl.reshape(li, [1, Q_TILE])
+                                mi_new = pl.maximum(mi_prev_nd, mij_nd)
+                                mi_diff = pl.sub(mi_prev_nd, mi_new)
                                 alpha = pl.exp(mi_diff)
-                                mij_diff = pl.sub(mij_tile_nd, mi_new)
+                                mij_diff = pl.sub(mij_nd, mi_new)
                                 beta = pl.exp(mij_diff)
-                                li_scaled = pl.mul(alpha, li_tile_nd)
-                                lij_scaled = pl.mul(beta, lij_tile_nd)
-                                li_updated = pl.add(li_scaled, lij_scaled)
+                                li_scaled = pl.mul(alpha, li_prev_nd)
+                                lij_scaled = pl.mul(beta, lij_nd)
+                                li_new = pl.add(li_scaled, lij_scaled)
                                 alpha_dn = pl.reshape(alpha, [Q_TILE, 1])
-                                oi_scaled = pl.row_expand_mul(oi_tile, alpha_dn)
+                                oi_scaled = pl.mul(oi, alpha_dn)
                                 beta_dn = pl.reshape(beta, [Q_TILE, 1])
-                                oi_new_scaled = pl.row_expand_mul(oi_new_tile, beta_dn)
+                                oi_new_scaled = pl.mul(oi_tmp, beta_dn)
                                 oi_updated = pl.add(oi_scaled, oi_new_scaled)
-                                mi_new_dn = pl.reshape(mi_new, [Q_TILE, 1])
-                                li_updated_dn = pl.reshape(li_updated, [Q_TILE, 1])
-                                pl.store(mi_new_dn, [0, 0], [Q_TILE, 1], mi_update)
-                                pl.store(li_updated_dn, [0, 0], [Q_TILE, 1], li_update)
+                                mi_update = pl.reshape(mi_new, [Q_TILE, 1])
+                                li_update = pl.reshape(li_new, [Q_TILE, 1])
+                                oi = oi_updated
                                 if is_last:
-                                    dst_tile = pl.row_expand_div(oi_updated, li_updated_dn)
-                                    pl.store(dst_tile, [0, 0], [Q_TILE, HEAD_DIM], out_view)
-                                    pl.store(oi_updated, [0, 0], [Q_TILE, HEAD_DIM], oi)
+                                    li_new_dn = pl.reshape(li_new, [Q_TILE, 1])
+                                    dst = pl.div(oi_updated, li_new_dn)
+                                    out = pl.assemble(out, dst, [cur_offset, 0])
                                 else:
-                                    zero_tile = pl.block.full(
-                                        [Q_TILE, HEAD_DIM], dtype=pl.FP32, value=0.0
+                                    out_placeholder2: pl.Tensor[[q_tile, HEAD_DIM_CFG], pl.FP32] = pl.create_tensor(
+                                        [Q_TILE, HEAD_DIM], dtype=pl.FP32
                                     )
-                                    pl.store(zero_tile, [0, 0], [Q_TILE, HEAD_DIM], out_view)
-                                    pl.store(oi_updated, [0, 0], [Q_TILE, HEAD_DIM], oi)
+                                    out = pl.assemble(
+                                        out,
+                                        out_placeholder2,
+                                        [cur_offset, 0],
+                                    )
 
             return out
 
@@ -401,7 +326,7 @@ def compile_and_run(
     work_dir: str | None = None,
     dump_passes: bool = True,
 ) -> RunResult:
-    """Compile the paged-attention program and run it (compile + device execution when code_runner is available).
+    """Compile the paged-attention program and run it.
 
     Args:
         batch: Batch size.
@@ -438,9 +363,8 @@ def compile_and_run(
         scale=scale,
     )
 
-    # Default work_dir: keep generated kernels/orchestration under examples/pa_build (relative to cwd)
     if work_dir is None:
-        work_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "pa_build"))
+        work_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "pa4_build"))
 
     result = run(
         program=program,
@@ -457,7 +381,6 @@ def compile_and_run(
             work_dir=work_dir,
         ),
     )
-    # run() catches exceptions and returns RunResult(passed=False, error=...); treat missing code_runner as compile-only success
     if not result.passed and result.error and "code_runner" in result.error:
         print("Result: COMPILE OK — device run skipped (code_runner not found).")
         print("  Compilation and passes completed successfully.")
@@ -482,7 +405,6 @@ def main():
         device_id=11,
         dump_passes=True,
     )
-    # Avoid duplicate "Result:" when compile_and_run already printed COMPILE OK
     if getattr(result, "error", None) != "device run skipped (no code_runner)":
         print(f"Result: {result}")
     print("\nDone.")

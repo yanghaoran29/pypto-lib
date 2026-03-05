@@ -7,15 +7,18 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 """
-Paged Attention: single orchestration with embedded InCore via with pl.incore()
+Paged Attention (interchange-friendly variant): single orchestration with embedded InCore.
 
-Same pipeline as paged_attention_example.py (QK matmul → softmax prepare → PV matmul
-→ online update) but all incore logic is inlined inside the orchestration using
-with pl.incore(): blocks instead of calling separate @pl.function(type=InCore) kernels.
+Compared to pa.py, the cur_seq / bn_this_batch computations are moved INSIDE the q_idx
+loop so that the b_idx and q_idx chunked loops form one unbroken chain:
 
-Uses chunked loop syntax (para_for.md): batch and query-tile loops are chunked for
-parallel expansion (chunk loop + in_chunk loop); the KV-block loop (bn) stays
-sequential due to online softmax recurrence.
+    b_out → b_in → q_out → q_in → body
+
+This allows InterchangeChunkLoops to produce a single-level interchange:
+
+    b_out → q_out → InCore { b_in → q_in → body }
+
+instead of the two-level InCore nesting seen in pa.py.
 """
 
 import os
@@ -80,13 +83,14 @@ def build_paged_attention_program(
             """Orchestration: chunked loops over batch and q_tile (constants); sequential bn; each stage in with pl.incore()."""
             # Loop bounds and dimensions from pa.py constants (BATCH_CFG, Q_LOOP_CFG, etc.)
 
-            # Chunked loop over batch: pl.parallel, chunk → expansion (bounds are compile-time constants)
+            # Chunked loop over batch and query-tile: both are pl.parallel with chunk,
+            # forming one unbroken chain (b_out → b_in → q_out → q_in) for interchange.
             for b_idx in pl.parallel(0, BATCH_CFG, 1, chunk=BATCH_CHUNK):
-                #with pl.incore():
-                    cur_seq = pl.tensor.read(context_lens, [b_idx])
-                    bn_this_batch = (cur_seq + BLOCK_SIZE_CFG - 1) // BLOCK_SIZE_CFG
-                    # Chunked loop over query-tile groups: pl.parallel, chunk → expansion
                     for q_idx in pl.parallel(0, Q_LOOP_CFG, 1, chunk=Q_CHUNK):
+                        # cur_seq / bn_this_batch moved here (inside q_idx) so no
+                        # non-loop statements sit between b_idx and q_idx loops.
+                        cur_seq = pl.tensor.read(context_lens, [b_idx])
+                        bn_this_batch = (cur_seq + BLOCK_SIZE_CFG - 1) // BLOCK_SIZE_CFG
                         cur_offset = b_idx * Q_HEAD_NUM + q_idx * q_tile
 
                         oi: pl.Tensor[[q_tile, HEAD_DIM_CFG], pl.FP32] = pl.create_tensor(
@@ -440,7 +444,7 @@ def compile_and_run(
 
     # Default work_dir: keep generated kernels/orchestration under examples/pa_build (relative to cwd)
     if work_dir is None:
-        work_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "pa_build"))
+        work_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "pa1_build"))
 
     result = run(
         program=program,
