@@ -237,9 +237,14 @@ def build_qwen3_single_layer_decode_program(
                             s0 = sb * SEQ_TILE
                             valid_len = pl.min(SEQ_TILE, ctx_len - s0)
                             cache_row0 = b * NUM_KV_HEADS_CFG * MAX_SEQ_CFG + kvh * MAX_SEQ_CFG + s0
-                            k_tile = pl.view(k_cache, [SEQ_TILE, HEAD_DIM_CFG], [cache_row0, 0])
-                            v_tile = pl.view(v_cache, [SEQ_TILE, HEAD_DIM_CFG], [cache_row0, 0])
+                            k_tile = pl.view(k_cache, [SEQ_TILE, HEAD_DIM_CFG], [cache_row0, 0],
+                                             valid_shape=[valid_len, HEAD_DIM_CFG])
+                            v_tile = pl.view(v_cache, [SEQ_TILE, HEAD_DIM_CFG], [cache_row0, 0],
+                                             valid_shape=[valid_len, HEAD_DIM_CFG])
                             scores = pl.mul(pl.matmul(q_rot_bf16, k_tile, b_trans=True), ATTN_SCALE)
+                            # TODO(valid_shape): once the compiler propagates valid_shape
+                            # from k_tile, scores will auto-get vs=[1, valid_len] and the
+                            # manual scores_valid view + exp_pad can be removed.
                             scores_valid = pl.view(scores, [1, valid_len], [0, 0])
                             cur_mi = pl.cast(pl.row_max(scores_valid), target_type=pl.FP32)
                             exp_scores = pl.exp(pl.row_expand_sub(scores_valid, cur_mi))

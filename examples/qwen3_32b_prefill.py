@@ -114,15 +114,19 @@ def build_qwen3_single_layer_prefill_program(
                         for kb in pl.range(HIDDEN_BLOCKS):
                             k0 = kb * K_CHUNK
                             x_chunk = pl.cast(
-                                pl.view(hidden_states, [TOK_TILE, K_CHUNK], [b, p0, k0]),
+                                pl.view(hidden_states, [TOK_TILE, K_CHUNK], [b, p0, k0],
+                                        valid_shape=[valid_tok, K_CHUNK]),
                                 target_type=pl.FP32,
                             )
                             sq_sum = pl.add(sq_sum, pl.row_sum(pl.mul(x_chunk, x_chunk)))
 
                         inv_rms = pl.rsqrt(pl.add(pl.mul(sq_sum, HIDDEN_INV), EPS))
-                        q_proj_tile = pl.create_tensor([TOK_TILE, HIDDEN_CFG], dtype=pl.BF16)
-                        k_proj_tile = pl.create_tensor([TOK_TILE, KV_HIDDEN_CFG], dtype=pl.BF16)
-                        v_proj_tile = pl.create_tensor([TOK_TILE, KV_HIDDEN_CFG], dtype=pl.BF16)
+                        q_proj_tile = pl.create_tensor([TOK_TILE, HIDDEN_CFG], dtype=pl.BF16,
+                                                       valid_shape=[valid_tok, HIDDEN_CFG])
+                        k_proj_tile = pl.create_tensor([TOK_TILE, KV_HIDDEN_CFG], dtype=pl.BF16,
+                                                       valid_shape=[valid_tok, KV_HIDDEN_CFG])
+                        v_proj_tile = pl.create_tensor([TOK_TILE, KV_HIDDEN_CFG], dtype=pl.BF16,
+                                                       valid_shape=[valid_tok, KV_HIDDEN_CFG])
 
                         for ob in pl.parallel(0, Q_OUT_BLOCKS, 1, chunk=8):
                             q0 = ob * Q_OUT_CHUNK
@@ -131,7 +135,8 @@ def build_qwen3_single_layer_prefill_program(
                             for kb in pl.range(HIDDEN_BLOCKS):
                                 k0 = kb * K_CHUNK
                                 x_chunk = pl.cast(
-                                    pl.view(hidden_states, [TOK_TILE, K_CHUNK], [b, p0, k0]),
+                                    pl.view(hidden_states, [TOK_TILE, K_CHUNK], [b, p0, k0],
+                                            valid_shape=[valid_tok, K_CHUNK]),
                                     target_type=pl.FP32,
                                 )
                                 gamma = pl.view(input_rms_weight, [1, K_CHUNK], [0, k0])
@@ -149,7 +154,8 @@ def build_qwen3_single_layer_prefill_program(
                             for kb in pl.range(HIDDEN_BLOCKS):
                                 k0 = kb * K_CHUNK
                                 x_chunk = pl.cast(
-                                    pl.view(hidden_states, [TOK_TILE, K_CHUNK], [b, p0, k0]),
+                                    pl.view(hidden_states, [TOK_TILE, K_CHUNK], [b, p0, k0],
+                                            valid_shape=[valid_tok, K_CHUNK]),
                                     target_type=pl.FP32,
                                 )
                                 gamma = pl.view(input_rms_weight, [1, K_CHUNK], [0, k0])
@@ -168,7 +174,8 @@ def build_qwen3_single_layer_prefill_program(
                     # attn_tile stay zero; scope 3 writes them to the padding area
                     # of `out` which the caller ignores.
                     with pl.auto_incore():
-                        attn_tile = pl.create_tensor([TOK_TILE, HIDDEN_CFG], dtype=pl.FP32)
+                        attn_tile = pl.create_tensor([TOK_TILE, HIDDEN_CFG], dtype=pl.FP32,
+                                                     valid_shape=[valid_tok, HIDDEN_CFG])
                         attn_tile = pl.mul(attn_tile, 0.0)
                         for ti in pl.range(valid_tok):
                             pos = p0 + ti
@@ -246,9 +253,14 @@ def build_qwen3_single_layer_prefill_program(
                                     s0 = sb * SEQ_TILE
                                     valid_len = pl.min(SEQ_TILE, ctx_len - s0)
                                     cache_row0 = b * NUM_KV_HEADS_CFG * MAX_SEQ_CFG + kvh * MAX_SEQ_CFG + s0
-                                    k_tile = pl.view(k_cache, [SEQ_TILE, HEAD_DIM_CFG], [cache_row0, 0])
-                                    v_tile = pl.view(v_cache, [SEQ_TILE, HEAD_DIM_CFG], [cache_row0, 0])
+                                    k_tile = pl.view(k_cache, [SEQ_TILE, HEAD_DIM_CFG], [cache_row0, 0],
+                                                     valid_shape=[valid_len, HEAD_DIM_CFG])
+                                    v_tile = pl.view(v_cache, [SEQ_TILE, HEAD_DIM_CFG], [cache_row0, 0],
+                                                     valid_shape=[valid_len, HEAD_DIM_CFG])
                                     scores = pl.mul(pl.matmul(q_rot_bf16, k_tile, b_trans=True), ATTN_SCALE)
+                                    # TODO(valid_shape): once the compiler propagates valid_shape
+                                    # from k_tile, scores will auto-get vs=[1, valid_len] and the
+                                    # manual scores_valid view + exp_pad can be removed.
                                     scores_valid = pl.view(scores, [1, valid_len], [0, 0])
                                     cur_mi = pl.cast(pl.row_max(scores_valid), target_type=pl.FP32)
                                     exp_scores = pl.exp(pl.row_expand_sub(scores_valid, cur_mi))
@@ -278,7 +290,8 @@ def build_qwen3_single_layer_prefill_program(
 
                     # Scope 3: output projection + residual + post-rms + MLP + residual.
                     with pl.auto_incore():
-                        resid1_tile = pl.create_tensor([TOK_TILE, HIDDEN_CFG], dtype=pl.FP32)
+                        resid1_tile = pl.create_tensor([TOK_TILE, HIDDEN_CFG], dtype=pl.FP32,
+                                                       valid_shape=[valid_tok, HIDDEN_CFG])
                         for ob in pl.parallel(0, Q_OUT_BLOCKS, 1, chunk=8):
                             o0 = ob * Q_OUT_CHUNK
                             o_acc = pl.create_tensor([TOK_TILE, Q_OUT_CHUNK], dtype=pl.FP32)
@@ -292,7 +305,8 @@ def build_qwen3_single_layer_prefill_program(
                                 w_chunk = pl.view(wo, [K_CHUNK, Q_OUT_CHUNK], [k0, o0])
                                 o_acc = pl.add(o_acc, pl.matmul(a_chunk, w_chunk))
                             resid = pl.cast(
-                                pl.view(hidden_states, [TOK_TILE, Q_OUT_CHUNK], [b, p0, o0]),
+                                pl.view(hidden_states, [TOK_TILE, Q_OUT_CHUNK], [b, p0, o0],
+                                        valid_shape=[valid_tok, Q_OUT_CHUNK]),
                                 target_type=pl.FP32,
                             )
                             resid1_tile = pl.assemble(resid1_tile, pl.add(o_acc, resid), [0, o0])
@@ -305,8 +319,10 @@ def build_qwen3_single_layer_prefill_program(
                             sq_sum = pl.add(sq_sum, pl.row_sum(pl.mul(x_chunk, x_chunk)))
                         inv_rms = pl.rsqrt(pl.add(pl.mul(sq_sum, HIDDEN_INV), EPS))
 
-                        post_norm_tile = pl.create_tensor([TOK_TILE, HIDDEN_CFG], dtype=pl.BF16)
-                        down_proj_tile = pl.create_tensor([TOK_TILE, HIDDEN_CFG], dtype=pl.FP32)
+                        post_norm_tile = pl.create_tensor([TOK_TILE, HIDDEN_CFG], dtype=pl.BF16,
+                                                          valid_shape=[valid_tok, HIDDEN_CFG])
+                        down_proj_tile = pl.create_tensor([TOK_TILE, HIDDEN_CFG], dtype=pl.FP32,
+                                                          valid_shape=[valid_tok, HIDDEN_CFG])
                         down_proj_tile = pl.mul(down_proj_tile, 0.0)
 
                         for kb in pl.range(HIDDEN_BLOCKS):

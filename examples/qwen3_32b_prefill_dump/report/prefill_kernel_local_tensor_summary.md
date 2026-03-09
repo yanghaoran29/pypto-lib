@@ -26,13 +26,40 @@ padded to `MAX_SEQ` on the sequence axis; only valid tokens are processed.
 
 - `seq_lens: Tensor[[BATCH], INT32]` — per-session input token count.
 - Token iteration: `tok_blocks = ceil(seq_len_b / TOK_TILE)`.
-- **Scope 1 & 3**: Always use full `[TOK_TILE, ...]` views from GM tensors
-  (512-B aligned); padding rows in the tail tile map to allocated-but-unused
-  MAX_SEQ slots.
+- **Scope 1 & 3**: Always use full `[TOK_TILE, ...]` storage shapes from GM
+  tensors (512-B aligned); padding rows in the tail tile map to
+  allocated-but-unused MAX_SEQ slots.
 - **Scope 2** (attention + KV cache write): iterates only over `valid_tok`
   tokens (`for ti in pl.range(valid_tok)`) to avoid writing garbage into
   the KV cache.  Padding rows in `attn_tile` stay zero; scope 3 writes them
   to the padding area of `out` which the caller ignores.
+
+### `valid_shape` Integration (per `tensor_valid_shape.md` design)
+
+**GM tensor views** carry explicit `valid_shape` annotations:
+
+| Location | Storage Shape | valid_shape | Purpose |
+|---|---|---|---|
+| `hidden_states` views (Scope 1 & 3) | `[TOK_TILE, K_CHUNK]` | `[valid_tok, K_CHUNK]` | Tail token tile |
+| KV-cache views (Scope 2) | `[SEQ_TILE, HEAD_DIM]` | `[valid_len, HEAD_DIM]` | Tail cache tile |
+| `hidden_states` residual view (Scope 3) | `[TOK_TILE, Q_OUT_CHUNK]` | `[valid_tok, Q_OUT_CHUNK]` | Tail token tile |
+
+**Local tensor creation** with `valid_shape`:
+
+| Tensor | Storage Shape | valid_shape |
+|---|---|---|
+| `q_proj_tile` | `[TOK_TILE, HIDDEN]` | `[valid_tok, HIDDEN]` |
+| `k_proj_tile` / `v_proj_tile` | `[TOK_TILE, KV_HIDDEN]` | `[valid_tok, KV_HIDDEN]` |
+| `attn_tile` | `[TOK_TILE, HIDDEN]` | `[valid_tok, HIDDEN]` |
+| `resid1_tile` | `[TOK_TILE, HIDDEN]` | `[valid_tok, HIDDEN]` |
+| `post_norm_tile` | `[TOK_TILE, HIDDEN]` | `[valid_tok, HIDDEN]` |
+| `down_proj_tile` | `[TOK_TILE, HIDDEN]` | `[valid_tok, HIDDEN]` |
+
+**Current workaround** (until the compiler propagates `valid_shape`):
+`scores_valid = pl.view(scores, [1, valid_len], ...)` + zero-padded `exp_pad`
+are used to mask garbage scores from padding cache rows in the attention loop.
+Once the compiler's `ConvertTensorToBlockOps` pass forwards tensor-level
+`valid_shape` to `block.load valid_shapes`, these workarounds can be removed.
 
 ## 5) Function-Level Statistics
 

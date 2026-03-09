@@ -26,7 +26,29 @@ passed via the `seq_lens` input tensor (`[BATCH], INT32`).
 - `seq_lens: Tensor[[BATCH], INT32]` — per-session context length.
 - Decode position: `pos = seq_lens[b] - 1`.
 - Context length for attention: `ctx_len = seq_lens[b]`.
-- All `pl.view` of GM tensors use fixed, 512-B-aligned shapes.
+- All `pl.view` of GM tensors use fixed, 512-B-aligned storage shapes.
+
+### `valid_shape` Integration (per `tensor_valid_shape.md` design)
+
+KV-cache views carry explicit `valid_shape` annotations:
+
+```python
+k_tile = pl.view(k_cache, [SEQ_TILE, HEAD_DIM], [row0, 0],
+                 valid_shape=[valid_len, HEAD_DIM])
+v_tile = pl.view(v_cache, [SEQ_TILE, HEAD_DIM], [row0, 0],
+                 valid_shape=[valid_len, HEAD_DIM])
+```
+
+- **Storage shape** `[SEQ_TILE, HEAD_DIM]` satisfies 512-B alignment.
+- **valid_shape** `[valid_len, HEAD_DIM]` tracks the actual number of valid
+  cache rows in the tail tile.
+
+**Current workaround** (until the compiler propagates `valid_shape`):
+`scores_valid = pl.view(scores, [1, valid_len], ...)` + zero-padded `exp_pad`
+are used to mask garbage scores from padding rows. Once the compiler's
+`ConvertTensorToBlockOps` pass forwards tensor-level `valid_shape` to
+`block.load valid_shapes`, `row_max` / `row_sum` will automatically operate
+on valid columns only, and the workaround can be removed.
 
 ## 5) Function-Level Statistics
 
