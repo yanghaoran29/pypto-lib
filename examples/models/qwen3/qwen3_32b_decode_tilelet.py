@@ -47,6 +47,8 @@ Design goals:
 """
 
 
+import os
+
 import pypto.language as pl
 
 
@@ -148,44 +150,45 @@ def build_qwen3_single_layer_decode_program(
             k_proj = pl.create_tensor([BATCH_CFG, KV_HIDDEN_CFG], dtype=pl.FP32)
             v_proj = pl.create_tensor([BATCH_CFG, KV_HIDDEN_CFG], dtype=pl.FP32)
             attn_out = pl.create_tensor([BATCH_CFG, HIDDEN_CFG], dtype=pl.BF16)
+            normed_buf = pl.create_tensor([BATCH_CFG, HIDDEN_CFG], dtype=pl.BF16)
 
             # Initialize intermediate tensors to zero so assemble generates inout.
-            for ob in pl.range(Q_OUT_BLOCKS):
-                q0 = ob * Q_OUT_CHUNK
-                with pl.incore():
-                    zero_q = pl.full([BATCH_TILE, Q_OUT_CHUNK], dtype=pl.FP32, value=0.0)
-                    zero_attn = pl.cast(zero_q, target_type=pl.BF16)
-                    q_proj = pl.assemble(q_proj, zero_q, [0, q0])
-                    attn_out = pl.assemble(attn_out, zero_attn, [0, q0])
-            for ob in pl.range(KV_OUT_BLOCKS):
-                kv0 = ob * KV_OUT_CHUNK
-                with pl.incore():
-                    zero_k = pl.full([BATCH_TILE, KV_OUT_CHUNK], dtype=pl.FP32, value=0.0)
-                    zero_v = pl.full([BATCH_TILE, KV_OUT_CHUNK], dtype=pl.FP32, value=0.0)
-                    k_proj = pl.assemble(k_proj, zero_k, [0, kv0])
-                    v_proj = pl.assemble(v_proj, zero_v, [0, kv0])
+            with pl.incore():
+                for ob in pl.range(Q_OUT_BLOCKS):
+                    q0 = ob * Q_OUT_CHUNK
+                    zero_1 = pl.full([BATCH_TILE, Q_OUT_CHUNK], dtype=pl.FP32, value=0.0)
+                    zero_1_bf = pl.cast(zero_1, target_type=pl.BF16)
+                    q_proj = pl.assemble(q_proj, zero_1, [0, q0])
+                    attn_out = pl.assemble(attn_out, zero_1_bf, [0, q0])
+                    normed_buf = pl.assemble(normed_buf, zero_1_bf, [0, q0])
+            with pl.incore():
+                for ob in pl.range(KV_OUT_BLOCKS):
+                    kv0 = ob * KV_OUT_CHUNK
+                    zero_2 = pl.full([BATCH_TILE, KV_OUT_CHUNK], dtype=pl.FP32, value=0.0)
+                    k_proj = pl.assemble(k_proj, zero_2, [0, kv0])
+                    v_proj = pl.assemble(v_proj, zero_2, [0, kv0])
 
-            # ── Scope 1: input RMSNorm + Q/K/V projection ──
-            for b0 in pl.range(0, BATCH_CFG, BATCH_TILE):
-                normed_tile = pl.create_tensor([BATCH_TILE, HIDDEN_CFG], dtype=pl.BF16)
-
-                with pl.incore():
-                    partial_sq = pl.full([1, BATCH_TILE], dtype=pl.FP32, value=0.0)
+            # Scope 1 input RMSNorm + Q/K/V projection
+            # Stage 1: RMSNorm — two-pass over all batch tiles, results in normed_buf.
+            with pl.auto_incore():
+                for b0 in pl.parallel(0, BATCH_CFG, BATCH_TILE, chunk=1):
+                    # Phase 1: accumulate squared sum in [1, BATCH_TILE], compute inv_rms.
+                    sq_sum = pl.full([1, BATCH_TILE], dtype=pl.FP32, value=0.0)
                     for kb in pl.range(HIDDEN_BLOCKS):
                         k0 = kb * K_CHUNK
                         x_chunk = pl.cast(
                             pl.slice(hidden_states, [BATCH_TILE, K_CHUNK], [b0, k0]),
                             target_type=pl.FP32,
                         )
-                        partial_sq = pl.add(
-                            partial_sq,
+                        sq_sum: pl.Tensor[[1, BATCH_TILE], pl.FP32] = pl.add(
+                            sq_sum,
                             pl.reshape(pl.row_sum(pl.mul(x_chunk, x_chunk)), [1, BATCH_TILE]),
                         )
-                    variance = pl.reshape(
-                        pl.add(pl.mul(partial_sq, HIDDEN_INV), EPS),
+                    inv_rms_tile: pl.Tensor[[BATCH_TILE, 1], pl.FP32] = pl.reshape(
+                        pl.rsqrt(pl.add(pl.mul(sq_sum, HIDDEN_INV), EPS)),
                         [BATCH_TILE, 1],
                     )
-
+                    # Phase 2: apply inv_rms and RMS weight to produce normed output.
                     for kb in pl.range(HIDDEN_BLOCKS):
                         k0 = kb * K_CHUNK
                         x_chunk = pl.cast(
@@ -193,43 +196,40 @@ def build_qwen3_single_layer_decode_program(
                             target_type=pl.FP32,
                         )
                         gamma = pl.slice(input_rms_weight, [1, K_CHUNK], [0, k0])
-                        normed = pl.col_expand_mul(pl.row_expand_mul(x_chunk, variance), gamma)
-                        normed_tile = pl.assemble(normed_tile, pl.cast(normed, target_type=pl.BF16), [0, k0])
+                        normed = pl.col_expand_mul(
+                            pl.row_expand_mul(x_chunk, inv_rms_tile), gamma
+                        )
+                        normed_buf = pl.assemble(
+                            normed_buf, pl.cast(normed, target_type=pl.BF16), [b0, k0]
+                        )
 
-                for ob in pl.range(Q_OUT_BLOCKS):
-                    q0 = ob * Q_OUT_CHUNK
-                    with pl.incore():
-                        tile_a = pl.slice(normed_tile, [BATCH_TILE, K_CHUNK], [0, 0])
-                        tile_b = pl.slice(wq, [K_CHUNK, Q_OUT_CHUNK], [0, q0])
-                        q_acc = pl.matmul(tile_a, tile_b, out_dtype=pl.FP32)
-                        for kb in pl.range(1, HIDDEN_BLOCKS):
+            with pl.auto_incore(split=pl.SplitMode.UP_DOWN):
+                # Stage 2: Q projection (AIC+AIV cross-core incore).
+                for ob in pl.parallel(0, Q_OUT_BLOCKS, 1, chunk=4):
+                    for b0 in pl.range(0, batch, BATCH_TILE):
+                        q0 = ob * Q_OUT_CHUNK
+                        q_acc = pl.full([BATCH_TILE, Q_OUT_CHUNK], dtype=pl.FP32, value=0.0)
+                        for kb in pl.range(HIDDEN_BLOCKS):
                             k0 = kb * K_CHUNK
-                            tile_a_i = pl.slice(normed_tile, [BATCH_TILE, K_CHUNK], [0, k0])
-                            tile_b_i = pl.slice(wq, [K_CHUNK, Q_OUT_CHUNK], [k0, q0])
-                            q_acc = pl.matmul_acc(q_acc, tile_a_i, tile_b_i)
+                            normed_tile = pl.slice(normed_buf, [BATCH_TILE, K_CHUNK], [b0, k0])
+                            wq_chunk = pl.slice(wq, [K_CHUNK, Q_OUT_CHUNK], [k0, q0])
+                            q_acc = pl.add(q_acc, pl.matmul(normed_tile, wq_chunk, out_dtype=pl.FP32))
                         q_proj = pl.assemble(q_proj, q_acc, [b0, q0])
 
-                for ob in pl.range(KV_OUT_BLOCKS):
-                    kv0 = ob * KV_OUT_CHUNK
-                    with pl.incore():
-                        tile_a = pl.slice(normed_tile, [BATCH_TILE, K_CHUNK], [0, 0])
-                        tile_wk = pl.slice(wk, [K_CHUNK, KV_OUT_CHUNK], [0, kv0])
-                        k_acc = pl.matmul(tile_a, tile_wk, out_dtype=pl.FP32)
-                        for kb in pl.range(1, HIDDEN_BLOCKS):
+                # Stage 3: K/V projection (AIC+AIV cross-core incore).
+                for ob in pl.parallel(0, KV_OUT_BLOCKS, 1, chunk=8):
+                    for b0 in pl.range(0, batch, BATCH_TILE):
+                        kv0 = ob * KV_OUT_CHUNK
+                        k_acc = pl.full([BATCH_TILE, KV_OUT_CHUNK], dtype=pl.FP32, value=0.0)
+                        v_acc = pl.full([BATCH_TILE, KV_OUT_CHUNK], dtype=pl.FP32, value=0.0)
+                        for kb in pl.range(HIDDEN_BLOCKS):
                             k0 = kb * K_CHUNK
-                            tile_a_i = pl.slice(normed_tile, [BATCH_TILE, K_CHUNK], [0, k0])
-                            tile_wk_i = pl.slice(wk, [K_CHUNK, KV_OUT_CHUNK], [k0, kv0])
-                            k_acc = pl.matmul_acc(k_acc, tile_a_i, tile_wk_i)
+                            normed_tile = pl.slice(normed_buf, [BATCH_TILE, K_CHUNK], [b0, k0])
+                            wk_chunk = pl.slice(wk, [K_CHUNK, KV_OUT_CHUNK], [k0, kv0])
+                            wv_chunk = pl.slice(wv, [K_CHUNK, KV_OUT_CHUNK], [k0, kv0])
+                            k_acc = pl.add(k_acc, pl.matmul(normed_tile, wk_chunk, out_dtype=pl.FP32))
+                            v_acc = pl.add(v_acc, pl.matmul(normed_tile, wv_chunk, out_dtype=pl.FP32))
                         k_proj = pl.assemble(k_proj, k_acc, [b0, kv0])
-                    with pl.incore():
-                        tile_a = pl.slice(normed_tile, [BATCH_TILE, K_CHUNK], [0, 0])
-                        tile_wv = pl.slice(wv, [K_CHUNK, KV_OUT_CHUNK], [0, kv0])
-                        v_acc = pl.matmul(tile_a, tile_wv, out_dtype=pl.FP32)
-                        for kb in pl.range(1, HIDDEN_BLOCKS):
-                            k0 = kb * K_CHUNK
-                            tile_a_i = pl.slice(normed_tile, [BATCH_TILE, K_CHUNK], [0, k0])
-                            tile_wv_i = pl.slice(wv, [K_CHUNK, KV_OUT_CHUNK], [k0, kv0])
-                            v_acc = pl.matmul_acc(v_acc, tile_a_i, tile_wv_i)
                         v_proj = pl.assemble(v_proj, v_acc, [b0, kv0])
 
             # Scope 2: RoPE + cache update + decode attention.
@@ -253,7 +253,9 @@ def build_qwen3_single_layer_decode_program(
                     for ki in pl.range(NUM_KV_HEADS_CFG):
                         kv_col = ki * HEAD_DIM_CFG
                         k_lo = pl.slice(k_proj, [1, HEAD_DIM_CFG // 2], [b, kv_col])
-                        k_hi = pl.slice(k_proj, [1, HEAD_DIM_CFG // 2], [b, kv_col + HEAD_DIM_CFG // 2])
+                        k_hi = pl.slice(
+                            k_proj, [1, HEAD_DIM_CFG // 2], [b, kv_col + HEAD_DIM_CFG // 2]
+                        )
                         rot_lo = pl.sub(
                             pl.col_expand_mul(k_lo, cos_lo),
                             pl.col_expand_mul(k_hi, sin_lo),
@@ -275,7 +277,10 @@ def build_qwen3_single_layer_decode_program(
                         )
                         v_cache = pl.assemble(
                             v_cache,
-                            pl.cast(pl.slice(v_proj, [1, HEAD_DIM_CFG], [b, ki * HEAD_DIM_CFG]), target_type=pl.BF16),
+                            pl.cast(
+                                pl.slice(v_proj, [1, HEAD_DIM_CFG], [b, ki * HEAD_DIM_CFG]),
+                                target_type=pl.BF16,
+                            ),
                             [cache_row, 0],
                         )
 
@@ -295,7 +300,9 @@ def build_qwen3_single_layer_decode_program(
                         for qi in pl.range(Q_HEAD_BATCH):
                             q_col = (q_base + qi) * HEAD_DIM_CFG
                             q_lo = pl.slice(q_proj, [1, HEAD_DIM_CFG // 2], [b, q_col])
-                            q_hi = pl.slice(q_proj, [1, HEAD_DIM_CFG // 2], [b, q_col + HEAD_DIM_CFG // 2])
+                            q_hi = pl.slice(
+                                q_proj, [1, HEAD_DIM_CFG // 2], [b, q_col + HEAD_DIM_CFG // 2]
+                            )
                             rot_lo_bf16 = pl.cast(
                                 pl.sub(
                                     pl.col_expand_mul(q_lo, cos_lo),
@@ -522,12 +529,12 @@ def golden_qwen3_decode(tensors, params):
         for k0 in range(0, hidden_size, K_CHUNK):
             x_chunk = x_tile[:, k0:k0 + K_CHUNK]
             sq_sum = sq_sum + (x_chunk ** 2).sum(dim=-1, keepdim=True)
-        variance = sq_sum / hidden_size + EPS
-        normed = (x_tile * variance * input_rms_weight.float()).bfloat16()
+        inv_rms = torch.rsqrt(sq_sum / hidden_size + EPS)
+        normed = (x_tile * inv_rms * input_rms_weight.float()).bfloat16()
 
-        q_proj[b0:b_end, :] = (normed.float() @ wq.float()).float()
-        k_proj[b0:b_end, :] = (normed.float() @ wk.float()).float()
-        v_proj[b0:b_end, :] = (normed.float() @ wv.float()).float()
+        q_proj[b0:b_end, :] = normed.float() @ wq.float()
+        k_proj[b0:b_end, :] = normed.float() @ wk.float()
+        v_proj[b0:b_end, :] = normed.float() @ wv.float()
 
     attn_out = torch.zeros(batch, hidden_size, dtype=torch.bfloat16)
 
@@ -844,6 +851,10 @@ def compile_and_run(
 
 if __name__ == "__main__":
     import argparse
+
+    # set env for runtime
+    os.environ.setdefault("PTO2_RING_DEP_POOL", "32768")
+    os.environ.setdefault("PTO2_RING_TASK_WINDOW", "65536")
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
