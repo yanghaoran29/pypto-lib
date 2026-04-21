@@ -39,7 +39,7 @@ Design goals:
 - decode only (one new token per batch item)
 - single Transformer layer
 - batch = 16 by default
-- per-session KV cache depth up to 4096
+- per-session KV cache depth up to MAX_SEQ (default 1024 for faster dev; use --max-seq 4096 for full)
 - fewer, larger auto_incore scopes
 - fused outer loops where practical
 - all pl.slice of GM tensors are >= 512 B (alignment rule);
@@ -52,7 +52,9 @@ import pypto.language as pl
 
 
 BATCH = 16
-MAX_SEQ = 4096
+# Full Qwen3-32B decode uses 4096; large MAX_SEQ balloons KV cache, rope, and IR — slow to compile/run.
+# Override with `--max-seq` (default below is dev-friendly).
+MAX_SEQ = 1024
 NUM_HEADS = 64
 NUM_KV_HEADS = 8
 HEAD_DIM = 128
@@ -483,11 +485,12 @@ def build_qwen3_single_layer_decode_program(
 # ---------------------------------------------------------------------------
 
 
-def golden_qwen3_decode(tensors):
+def golden_qwen3_decode(tensors, *, max_seq_len: int | None = None):
     import torch
 
     batch = BATCH
-    max_seq_len = MAX_SEQ
+    if max_seq_len is None:
+        max_seq_len = MAX_SEQ
     hidden_size = HIDDEN
     num_heads = NUM_HEADS
     num_kv_heads = NUM_KV_HEADS
@@ -793,6 +796,7 @@ def build_tensor_specs(
 if __name__ == "__main__":
     import argparse
     import sys
+    from functools import partial
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -804,16 +808,41 @@ if __name__ == "__main__":
                         choices=["a2a3", "a2a3sim", "a5", "a5sim"])
     parser.add_argument("-d", "--device", type=int, default=0)
     parser.add_argument("--runtime-profiling", action="store_true", default=False)
+    parser.add_argument(
+        "--max-seq",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Override MAX_SEQ (KV/rope upper bound). Smaller => faster compile and less device memory. "
+        "If omitted, uses the MAX_SEQ constant at the top of this file.",
+    )
+    parser.add_argument(
+        "--dump-passes",
+        action="store_true",
+        default=False,
+        help="Dump IR after each compiler pass (slower, large build_output).",
+    )
+    parser.add_argument(
+        "--skip-golden",
+        action="store_true",
+        default=False,
+        help="Skip compute golden and validation; only run compile + runtime.",
+    )
     args = parser.parse_args()
 
+    max_seq_effective = args.max_seq if args.max_seq is not None else MAX_SEQ
+    golden_callable = None if args.skip_golden else partial(
+        golden_qwen3_decode, max_seq_len=max_seq_effective
+    )
+
     result = run(
-        program=build_qwen3_single_layer_decode_program(),
-        tensor_specs=build_tensor_specs(),
-        golden_fn=golden_qwen3_decode,
+        program=build_qwen3_single_layer_decode_program(max_seq_len=max_seq_effective),
+        tensor_specs=build_tensor_specs(max_seq_len=max_seq_effective),
+        golden_fn=golden_callable,
         config=RunConfig(
             rtol=2e-2,
             atol=2e-2,
-            compile=dict(dump_passes=True),
+            compile=dict(dump_passes=args.dump_passes),
             runtime=dict(
                 platform=args.platform,
                 device_id=args.device,
