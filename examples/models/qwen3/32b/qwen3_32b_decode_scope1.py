@@ -6,12 +6,19 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-"""Qwen3-32B decode Scope 1 — input RMSNorm + Q/K/V projection.
-  1. RMSNorm of input hidden states
-  2. Q/K/V projection via matmul
+"""Qwen3-32B decode Scope 1 — Tensor-mode SPMD version.
 
-Input hidden states are BF16; weights are BF16; projections output FP32.
+Pure Tensor-mode (Opaque) program with ``for i in pl.spmd(N):`` for multi-block
+dispatch. The compiler auto-outlines each SPMD loop body into an InCore scope
+with ``i = pl.tile.get_block_idx()`` injected as the first statement, then
+lowers the tensor ops to tile ops via ConvertTensorToTileOps.
+
+Stages:
+  1. RMSNorm of input hidden states — single-core (HIDDEN-axis reduction).
+  2. Q / K / V projection — SPMD-sharded over output column blocks.
 """
+from __future__ import annotations
+
 import pypto.language as pl
 
 BATCH = 16
@@ -20,18 +27,22 @@ NUM_HEADS = 64
 NUM_KV_HEADS = 8
 HEAD_DIM = 128
 HIDDEN = NUM_HEADS * HEAD_DIM  # 8192
-KV_HIDDEN = NUM_KV_HEADS * HEAD_DIM
+KV_HIDDEN = NUM_KV_HEADS * HEAD_DIM  # 1024
 INTERMEDIATE = 25600
 
 EPS = 1e-6
 HIDDEN_INV = 1.0 / HIDDEN
 
-# Vector TILELET budget (2 KB = 2048 B, FP32 = 4 B/elem):
 K_CHUNK = 512
 Q_OUT_CHUNK = 64
 KV_OUT_CHUNK = 64
 MLP_OUT_CHUNK = 64
 BATCH_TILE = 16
+
+# SPMD grid size. q_out_blocks=128 and kv_out_blocks=16 must both be divisible
+# by SPMD_CORES. pypto parser requires ``pl.spmd(<int literal>)``, so 4 is
+# repeated literally below.
+SPMD_CORES = 4
 
 
 def build_qwen3_scope1_program(
@@ -45,6 +56,14 @@ def build_qwen3_scope1_program(
     hidden_blocks = hidden // K_CHUNK
     q_out_blocks = hidden // Q_OUT_CHUNK
     kv_out_blocks = kv_hidden // KV_OUT_CHUNK
+
+    assert q_out_blocks % SPMD_CORES == 0, (
+        f"q_out_blocks ({q_out_blocks}) must be divisible by SPMD_CORES ({SPMD_CORES})"
+    )
+    assert kv_out_blocks % SPMD_CORES == 0, (
+        f"kv_out_blocks ({kv_out_blocks}) must be divisible by SPMD_CORES ({SPMD_CORES})"
+    )
+    assert SPMD_CORES == 4, "SPMD_CORES must be 4 to satisfy pypto parser requirement for pl.spmd"
 
     @pl.program
     class Qwen3Scope1:
@@ -67,7 +86,7 @@ def build_qwen3_scope1_program(
             for b0 in pl.parallel(0, batch, BATCH_TILE):
                 normed_tile = pl.create_tensor([BATCH_TILE, hidden], dtype=pl.BF16)
 
-                # Stage 1: RMSNorm + apply weights (vector ops only).
+                # Stage 1: RMSNorm — single-block (HIDDEN reduction).
                 with pl.at(level=pl.Level.CORE_GROUP, name_hint="rmsnorm"):
                     partial_sq = pl.full([1, BATCH_TILE], dtype=pl.FP32, value=0.0)
                     for kb in pl.pipeline(hidden_blocks, stage=2):
@@ -80,13 +99,10 @@ def build_qwen3_scope1_program(
                             partial_sq,
                             pl.reshape(pl.row_sum(pl.mul(x_chunk, x_chunk)), [1, BATCH_TILE]),
                         )
-                    # Compute variance in [1, BATCH_TILE], then reshape to [BATCH_TILE, 1]
-                    # for row_expand_mul broadcasting.
                     variance = pl.reshape(
                         pl.add(pl.mul(partial_sq, HIDDEN_INV), EPS),
                         [BATCH_TILE, 1],
                     )
-
                     inv_rms = pl.recip(pl.sqrt(variance))
 
                     for kb in pl.pipeline(hidden_blocks, stage=2):
@@ -99,10 +115,12 @@ def build_qwen3_scope1_program(
                         normed = pl.col_expand_mul(pl.row_expand_mul(x_chunk, inv_rms), gamma)
                         normed_tile = pl.assemble(normed_tile, pl.cast(normed, target_type=pl.BF16), [0, k0])
 
-                # Stage 2: Q projection (matmul + matmul_acc in single incore).
-                with pl.at(level=pl.Level.CORE_GROUP, optimization=pl.chunked_loop_optimizer, name_hint="q_proj"):
-                    for ob in pl.parallel(q_out_blocks, chunk=4):
-                        q0 = ob * Q_OUT_CHUNK
+                # Stage 2: Q projection — SPMD over output columns.
+                # q_out_blocks (128) / SPMD_CORES (4) = 32 dispatches.
+                for ob in pl.parallel(0, q_out_blocks, SPMD_CORES):
+                    q0_base = ob * Q_OUT_CHUNK
+                    for i in pl.spmd(4):
+                        q0 = q0_base + i * Q_OUT_CHUNK
 
                         tile_a = pl.slice(normed_tile, [BATCH_TILE, K_CHUNK], [0, 0])
                         tile_b = pl.slice(wq, [K_CHUNK, Q_OUT_CHUNK], [0, q0])
@@ -120,10 +138,11 @@ def build_qwen3_scope1_program(
 
                         q_proj = pl.assemble(q_proj, q_acc, [b0, q0])
 
-                # Stage 3: K/V projection (matmul + matmul_acc in single incore).
-                with pl.at(level=pl.Level.CORE_GROUP, optimization=pl.chunked_loop_optimizer, name_hint="kv_proj"):
-                    for ob in pl.parallel(kv_out_blocks, chunk=4):
-                        kv0 = ob * KV_OUT_CHUNK
+                # Stage 3: K projection — SPMD over output columns.
+                for ob in pl.parallel(0, kv_out_blocks, SPMD_CORES):
+                    kv0_base = ob * KV_OUT_CHUNK
+                    for i in pl.spmd(4):
+                        kv0 = kv0_base + i * KV_OUT_CHUNK
 
                         tile_a = pl.slice(normed_tile, [BATCH_TILE, K_CHUNK], [0, 0])
                         tile_wk = pl.slice(wk, [K_CHUNK, KV_OUT_CHUNK], [0, kv0])
@@ -140,6 +159,12 @@ def build_qwen3_scope1_program(
                             k_acc = pl.matmul_acc(k_acc, tile_a_i, tile_wk_i)
 
                         k_proj = pl.assemble(k_proj, k_acc, [b0, kv0])
+
+                # Stage 4: V projection — SPMD over output columns.
+                for ob in pl.parallel(0, kv_out_blocks, SPMD_CORES):
+                    kv0_base = ob * KV_OUT_CHUNK
+                    for i in pl.spmd(4):
+                        kv0 = kv0_base + i * KV_OUT_CHUNK
 
                         tile_a = pl.slice(normed_tile, [BATCH_TILE, K_CHUNK], [0, 0])
                         tile_wv = pl.slice(wv, [K_CHUNK, KV_OUT_CHUNK], [0, kv0])
