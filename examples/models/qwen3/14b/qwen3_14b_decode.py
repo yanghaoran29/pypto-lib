@@ -29,7 +29,20 @@ Scope 3:
   5. Final residual addition
 """
 
+# pyright: reportUndefinedVariable=false
+
 import pypto.language as pl
+
+# Dynamic dims for arbitrary user_batch support. Host allocates every
+# batch-dependent tensor at the user-visible batch (no host pad / no
+# host trim); the kernel internally rounds up to BATCH_TILE, zero-pads
+# trailing rows of every input via valid_shape on the load slice, and
+# trims the BF16 ND output via vec-to-vec textract before tstore. A
+# single compiled program serves any user_batch <= host KV-cache
+# capacity.
+USER_BATCH_DYN = pl.dynamic("USER_BATCH_DYN")
+KV_CACHE_ROWS_DYN = pl.dynamic("KV_CACHE_ROWS_DYN")
+BLOCK_TABLE_FLAT_DYN = pl.dynamic("BLOCK_TABLE_FLAT_DYN")
 
 BATCH = 16
 MAX_SEQ = 4096
@@ -71,6 +84,11 @@ def build_qwen3_decode_program(
     num_kv_heads: int = NUM_KV_HEADS,
     head_dim: int = HEAD_DIM,
 ):
+    # The `batch` parameter is only used by build_tensor_specs to size
+    # host buffers; it is no longer baked into the program. Every
+    # batch-dependent kernel signature dim is a pl.dynamic() variable
+    # (USER_BATCH_DYN / BLOCK_TABLE_FLAT_DYN / KV_CACHE_ROWS_DYN), so a
+    # single compiled program serves any user_batch <= host capacity.
     hidden = hidden_size
     kv_hidden = num_kv_heads * head_dim
     inter = intermediate_size
@@ -80,8 +98,6 @@ def build_qwen3_decode_program(
     kv_out_blocks = kv_hidden // KV_OUT_CHUNK
     mlp_out_blocks = inter // MLP_OUT_CHUNK
     max_blocks_per_seq = (max_seq + BLOCK_SIZE - 1) // BLOCK_SIZE
-    num_blocks = batch * max_blocks_per_seq
-    cache_rows = num_blocks * num_kv_heads * BLOCK_SIZE
     half_dim = head_dim // 2
     head_dim_inv = 1.0 / head_dim
     q_per_kv = num_heads // num_kv_heads
@@ -95,36 +111,57 @@ def build_qwen3_decode_program(
         @pl.function(type=pl.FunctionType.Opaque)
         def qwen3_decode(
             self,
-            hidden_states: pl.Tensor[[batch, hidden], pl.BF16],
+            hidden_states: pl.Tensor[[USER_BATCH_DYN, hidden], pl.BF16],
             input_rms_weight: pl.Tensor[[1, hidden], pl.FP32],
             wq: pl.Tensor[[hidden, hidden], pl.BF16],
             wk: pl.Tensor[[hidden, kv_hidden], pl.BF16],
             wv: pl.Tensor[[hidden, kv_hidden], pl.BF16],
             q_norm_weight: pl.Tensor[[1, head_dim], pl.FP32],
             k_norm_weight: pl.Tensor[[1, head_dim], pl.FP32],
-            seq_lens: pl.Tensor[[batch], pl.INT32],
-            block_table: pl.Tensor[[batch * max_blocks_per_seq], pl.INT32],
-            slot_mapping: pl.Tensor[[batch], pl.INT32],
+            seq_lens: pl.Tensor[[USER_BATCH_DYN], pl.INT32],
+            block_table: pl.Tensor[[BLOCK_TABLE_FLAT_DYN], pl.INT32],
+            slot_mapping: pl.Tensor[[USER_BATCH_DYN], pl.INT32],
             rope_cos: pl.Tensor[[max_seq, head_dim], pl.FP32],
             rope_sin: pl.Tensor[[max_seq, head_dim], pl.FP32],
-            k_cache: pl.Tensor[[cache_rows, head_dim], pl.BF16],
-            v_cache: pl.Tensor[[cache_rows, head_dim], pl.BF16],
+            k_cache: pl.Tensor[[KV_CACHE_ROWS_DYN, head_dim], pl.BF16],
+            v_cache: pl.Tensor[[KV_CACHE_ROWS_DYN, head_dim], pl.BF16],
             wo: pl.Tensor[[hidden, hidden], pl.BF16],
             post_rms_weight: pl.Tensor[[1, hidden], pl.FP32],
             w_gate: pl.Tensor[[hidden, inter], pl.BF16],
             w_up: pl.Tensor[[hidden, inter], pl.BF16],
             w_down: pl.Tensor[[inter, hidden], pl.BF16],
-            out: pl.Out[pl.Tensor[[batch, hidden], pl.BF16]],
-        ) -> pl.Tensor[[batch, hidden], pl.BF16]:
+            out: pl.Out[pl.Tensor[[USER_BATCH_DYN, hidden], pl.BF16]],
+        ) -> pl.Tensor[[USER_BATCH_DYN, hidden], pl.BF16]:
+            # Runtime user_batch (host-visible batch) and BATCH_TILE-aligned
+            # internal batch_padded. All scope-1/scope-3 batch loops iterate
+            # over batch_padded and zero-pad/trim using valid_shape on
+            # input/output slices. Scope-2 iterates over user_batch directly
+            # (its outer loop is sequential per request, no per-tile pad
+            # gymnastics needed).
+            user_batch = pl.tensor.dim(hidden_states, 0)
+            batch_padded = ((user_batch + BATCH_TILE - 1) // BATCH_TILE) * BATCH_TILE
+
             # Intermediate FP32 tensors between scope 1 and scope 2.
-            q_proj = pl.create_tensor([batch, hidden], dtype=pl.FP32)
-            k_proj = pl.create_tensor([batch, kv_hidden], dtype=pl.FP32)
-            v_proj = pl.create_tensor([batch, kv_hidden], dtype=pl.FP32)
-            q_proj_norm = pl.create_tensor([batch, hidden], dtype=pl.FP32)
-            k_proj_norm = pl.create_tensor([batch, kv_hidden], dtype=pl.FP32)
+            # Allocated at runtime batch_padded; pl.create_tensor zero-inits
+            # so trailing (batch_padded - user_batch) padded rows are 0,
+            # which is the invariant relied on by Q/K-norm and scope-3.
+            q_proj = pl.create_tensor([batch_padded, hidden], dtype=pl.FP32)
+            k_proj = pl.create_tensor([batch_padded, kv_hidden], dtype=pl.FP32)
+            v_proj = pl.create_tensor([batch_padded, kv_hidden], dtype=pl.FP32)
+            q_proj_norm = pl.create_tensor([batch_padded, hidden], dtype=pl.FP32)
+            k_proj_norm = pl.create_tensor([batch_padded, kv_hidden], dtype=pl.FP32)
 
             # Scope 1: input RMSNorm + Q/K/V projection.
-            for b0 in pl.range(0, batch, BATCH_TILE):
+            # Loop iterates over batch_padded (BATCH_TILE-aligned) so every
+            # matmul tile has a static known M dim of BATCH_TILE (a2a3
+            # requirement). Trailing rows in the tail iter are zero-padded
+            # at load time via valid_shape on the hidden_states slice.
+            # RMSNorm of zero rows yields 0 (x=0 -> normed = 0 * rsqrt(EPS)
+            # * gamma = 0), so normed_tile padded rows stay 0. Subsequent
+            # q/k/v matmul reads from this in-kernel staging only, so
+            # padded q_proj/k_proj/v_proj rows are 0 acc, harmless.
+            for b0 in pl.parallel(0, batch_padded, BATCH_TILE):
+                cur_valid = pl.min(BATCH_TILE, user_batch - b0)
                 normed_tile = pl.create_tensor([BATCH_TILE, hidden], dtype=pl.BF16)
 
                 with pl.at(level=pl.Level.CORE_GROUP):
@@ -132,7 +169,12 @@ def build_qwen3_decode_program(
                     for kb in pl.range(scope1_hidden_blocks):
                         k0 = kb * SCOPE1_K_CHUNK
                         x_chunk = pl.cast(
-                            pl.slice(hidden_states, [BATCH_TILE, SCOPE1_K_CHUNK], [b0, k0]),
+                            pl.slice(
+                                hidden_states,
+                                [BATCH_TILE, SCOPE1_K_CHUNK],
+                                [b0, k0],
+                                valid_shape=[cur_valid, SCOPE1_K_CHUNK],
+                            ),
                             target_type=pl.FP32,
                         )
                         partial_sq = pl.add(
@@ -148,7 +190,12 @@ def build_qwen3_decode_program(
                     for kb in pl.range(scope1_hidden_blocks):
                         k0 = kb * SCOPE1_K_CHUNK
                         x_chunk = pl.cast(
-                            pl.slice(hidden_states, [BATCH_TILE, SCOPE1_K_CHUNK], [b0, k0]),
+                            pl.slice(
+                                hidden_states,
+                                [BATCH_TILE, SCOPE1_K_CHUNK],
+                                [b0, k0],
+                                valid_shape=[cur_valid, SCOPE1_K_CHUNK],
+                            ),
                             target_type=pl.FP32,
                         )
                         gamma = pl.slice(input_rms_weight, [1, SCOPE1_K_CHUNK], [0, k0])
@@ -197,7 +244,10 @@ def build_qwen3_decode_program(
 
             # HF-style per-head q_norm / k_norm before RoPE, batched to avoid
             # generating unsupported 1x1 vec-tile scalar ops on A2/A3.
-            for b0 in pl.range(0, batch, BATCH_TILE):
+            # Loops over batch_padded; q_proj/k_proj are kernel-internal
+            # staging with zero-init padded rows (RMSNorm of 0 stays 0),
+            # so no valid_shape is needed here.
+            for b0 in pl.parallel(0, batch_padded, BATCH_TILE):
                 with pl.at(level=pl.Level.CORE_GROUP):
                     for h in pl.range(num_heads):
                         q0 = h * head_dim
@@ -222,10 +272,16 @@ def build_qwen3_decode_program(
                         k_proj_norm = pl.assemble(k_proj_norm, k_chunk_norm, [b0, k0])
 
             # Scope 2: RoPE + KV cache update + grouped decode attention.
-            attn_out = pl.create_tensor([batch, hidden], dtype=pl.BF16)
-            all_q_padded = pl.create_tensor([batch * total_q_groups * Q_HEAD_PAD, head_dim], dtype=pl.BF16)
+            # attn_out is allocated at batch_padded so scope-3 (which loops
+            # over batch_padded) can read full BATCH_TILE rows in every
+            # iteration; padded rows are zero-init and stay 0 (scope-2 only
+            # writes valid rows). all_q_padded is sized similarly.
+            attn_out = pl.create_tensor([batch_padded, hidden], dtype=pl.BF16)
+            all_q_padded = pl.create_tensor(
+                [batch_padded * total_q_groups * Q_HEAD_PAD, head_dim], dtype=pl.BF16,
+            )
             with pl.at(level=pl.Level.CORE_GROUP):
-                for idx in pl.range(batch * total_q_groups):
+                for idx in pl.range(batch_padded * total_q_groups):
                     all_q_padded = pl.assemble(
                         all_q_padded,
                         pl.cast(
@@ -235,7 +291,11 @@ def build_qwen3_decode_program(
                         [idx * Q_HEAD_PAD + Q_HEAD_BATCH, 0],
                     )
 
-            for b in pl.range(batch):
+            # Outer loop iterates user_batch sequentially (one row per iter).
+            # seq_lens / slot_mapping are sized [USER_BATCH_DYN] so reading
+            # b in [0, user_batch) is in-bounds. Padded b rows do not need
+            # attention; their attn_out rows stay zero (zero-init).
+            for b in pl.parallel(user_batch):
                 ctx_len = pl.tensor.read(seq_lens, [b])
                 pos = ctx_len - 1
                 ctx_blocks = (ctx_len + BLOCK_SIZE - 1) // BLOCK_SIZE
@@ -418,7 +478,22 @@ def build_qwen3_decode_program(
                 attn_out = pl.assemble(attn_out, attn_row, [b, 0])
 
             # Scope 3: output projection + residual + post RMSNorm + MLP + residual.
-            for b0 in pl.range(0, batch, BATCH_TILE):
+            # Loops over batch_padded so every iteration processes a full
+            # [BATCH_TILE, *] tile (a2a3 matmul M-tile constraint).
+            # `cur_valid` clamps the user-visible row count for input load
+            # (hidden_states valid_shape) and final out store (vec-to-vec
+            # textract trim). When user_batch is BATCH_TILE-aligned,
+            # cur_valid == BATCH_TILE every iter and trim is a no-op.
+            #
+            # Final down-proj + residual + cast uses the two-incore pattern
+            # validated in dynamic_batch_pad_repro:
+            #   cube incore : matmul_acc -> FP32 -> assemble to GM scratch
+            #   vec incore  : tload FP32 chunk -> add FP32 resid -> cast BF16
+            #                 (preserves ND layout) -> slice(valid_shape)
+            #                 -> assemble to out
+            # ND -> ND vec-to-vec textract is supported on ptoas 0.31.
+            for b0 in pl.parallel(0, batch_padded, BATCH_TILE):
+                cur_valid = pl.min(BATCH_TILE, user_batch - b0)
                 resid1_tile = pl.create_tensor([BATCH_TILE, hidden], dtype=pl.FP32)
 
                 for ob in pl.range(q_out_blocks):
@@ -436,7 +511,12 @@ def build_qwen3_decode_program(
 
                     with pl.at(level=pl.Level.CORE_GROUP):
                         resid = pl.cast(
-                            pl.slice(hidden_states, [BATCH_TILE, Q_OUT_CHUNK], [b0, o0]),
+                            pl.slice(
+                                hidden_states,
+                                [BATCH_TILE, Q_OUT_CHUNK],
+                                [b0, o0],
+                                valid_shape=[cur_valid, Q_OUT_CHUNK],
+                            ),
                             target_type=pl.FP32,
                         )
                         resid_sum = pl.add(o_acc, resid)
@@ -496,6 +576,11 @@ def build_qwen3_decode_program(
 
                 for dob in pl.range(hidden_blocks):
                     d0 = dob * K_CHUNK
+                    # FP32 GM scratch chunk used as the cube -> vec bridge.
+                    # Per-iter [BATCH_TILE, K_CHUNK] is small (16*128*4 =
+                    # 8 KiB) and avoids a large pre-allocated scratch.
+                    fp32_chunk_gm = pl.create_tensor([BATCH_TILE, K_CHUNK], dtype=pl.FP32)
+
                     with pl.at(level=pl.Level.CORE_GROUP):
                         mlp_chunk_0 = pl.slice(mlp_tile, [BATCH_TILE, MLP_OUT_CHUNK], [0, 0])
                         w_down_chunk_0 = pl.slice(w_down, [MLP_OUT_CHUNK, K_CHUNK], [0, d0])
@@ -509,13 +594,25 @@ def build_qwen3_decode_program(
                             )
                             w_down_chunk = pl.slice(w_down, [MLP_OUT_CHUNK, K_CHUNK], [o0, d0])
                             down_acc = pl.matmul_acc(down_acc, down_mlp_chunk_bf16, w_down_chunk)
+                        fp32_chunk_gm = pl.assemble(fp32_chunk_gm, down_acc, [0, 0])
+
                     with pl.at(level=pl.Level.CORE_GROUP):
-                        out_chunk = pl.add(
-                            down_acc,
-                            pl.slice(resid1_tile, [BATCH_TILE, K_CHUNK], [0, d0]),
-                        )
+                        # Vec-only incore: tload FP32 cube output as ND vec
+                        # tile, add FP32 residual (also ND vec), cast to
+                        # BF16 (vec-to-vec cast preserves ND layout), then
+                        # ND -> ND vec-to-vec textract to trim down to
+                        # cur_valid rows before tstore to user-sized out.
+                        down_chunk_fp32 = pl.slice(fp32_chunk_gm, [BATCH_TILE, K_CHUNK], [0, 0])
+                        resid_chunk_fp32 = pl.slice(resid1_tile, [BATCH_TILE, K_CHUNK], [0, d0])
+                        out_chunk = pl.add(down_chunk_fp32, resid_chunk_fp32)
                         out_chunk_cast = pl.cast(out_chunk, target_type=pl.BF16)
-                        out = pl.assemble(out, out_chunk_cast, [b0, d0])
+                        out_chunk_trimmed = pl.slice(
+                            out_chunk_cast,
+                            [BATCH_TILE, K_CHUNK],
+                            [0, 0],
+                            valid_shape=[cur_valid, K_CHUNK],
+                        )
+                        out = pl.assemble(out, out_chunk_trimmed, [b0, d0])
 
             return out
 
@@ -535,6 +632,12 @@ def build_tensor_specs(
     import torch
     from golden import TensorSpec
 
+    # Host allocates every batch-dependent tensor at the user-visible
+    # batch (no host pad / no host trim). The kernel internally rounds
+    # up to BATCH_TILE, zero-pads via valid_shape on input loads, and
+    # trims via vec-to-vec textract on the BF16 output. A single
+    # compiled program serves any batch <= host capacity (USER_BATCH_DYN
+    # / KV_CACHE_ROWS_DYN / BLOCK_TABLE_FLAT_DYN are pl.dynamic dims).
     hidden = num_heads * head_dim
     kv_hidden = num_kv_heads * head_dim
     inter = intermediate_size
@@ -840,13 +943,22 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--platform", type=str, default="a2a3",
                         choices=["a2a3", "a2a3sim", "a5", "a5sim"])
     parser.add_argument("-d", "--device", type=int, default=0)
+    parser.add_argument("-b", "--batch", type=int, default=BATCH,
+                        help=("User-visible batch size. Host allocates every "
+                              "batch-dependent tensor at exactly this size; "
+                              "the kernel internally rounds up to BATCH_TILE "
+                              "(%d), zero-pads input loads via valid_shape, "
+                              "and trims the BF16 output via vec-to-vec "
+                              "textract. A single compiled program serves "
+                              "any batch <= host KV-cache capacity. Default: "
+                              "%%(default)s" % BATCH_TILE))
     parser.add_argument("--runtime-profiling", action="store_true", default=False)
     parser.add_argument("--max-seq", action="store_true", default=False)
     args = parser.parse_args()
 
     result = run(
-        program=build_qwen3_decode_program(),
-        tensor_specs=build_tensor_specs(use_max_seq=args.max_seq),
+        program=build_qwen3_decode_program(batch=args.batch),
+        tensor_specs=build_tensor_specs(batch=args.batch, use_max_seq=args.max_seq),
         golden_fn=golden_qwen3_decode,
         config=RunConfig(
             rtol=3e-3,

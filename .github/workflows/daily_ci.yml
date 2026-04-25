@@ -102,6 +102,22 @@ jobs:
             fi
             echo "::endgroup::"
           done
+          # Extra dynamic-batch coverage for qwen3-14b-decode (default loop above
+          # already exercises batch=16; re-run with batch=1 and batch=20 to make
+          # sure a single compiled program serves arbitrary user_batch values).
+          QWEN3_14B="examples/models/qwen3/14b/qwen3_14b_decode.py"
+          for B in 1 20; do
+            case_name="${QWEN3_14B}[batch=${B}]"
+            echo "::group::${case_name}"
+            if ! timeout --kill-after=10s 600s python "${QWEN3_14B}" -p ${{ matrix.platform }} --batch "${B}"; then
+              failed="$failed ${case_name}"
+              echo "::error file=${QWEN3_14B}::FAIL (batch=${B})"
+              printf '%s\tfail\n' "${case_name}" >> results.tsv
+            else
+              printf '%s\tpass\n' "${case_name}" >> results.tsv
+            fi
+            echo "::endgroup::"
+          done
           if [ -n "$failed" ]; then
             echo "Failed cases:"
             for f in $failed; do echo "  - $f"; done
@@ -200,6 +216,22 @@ jobs:
               printf '%s\tfail\n' "$f" >> results.tsv
             else
               printf '%s\tpass\n' "$f" >> results.tsv
+            fi
+            echo "::endgroup::"
+          done
+          # Extra dynamic-batch coverage for qwen3-14b-decode (default loop above
+          # already exercises batch=16; re-run with batch=1 and batch=20 to make
+          # sure a single compiled program serves arbitrary user_batch values).
+          QWEN3_14B="examples/models/qwen3/14b/qwen3_14b_decode.py"
+          for B in 1 20; do
+            case_name="${QWEN3_14B}[batch=${B}]"
+            echo "::group::${case_name}"
+            if ! timeout --kill-after=10s 600s python "${QWEN3_14B}" -p a2a3 -d $DEVICE_ID --batch "${B}"; then
+              failed="$failed ${case_name}"
+              echo "::error file=${QWEN3_14B}::FAIL (batch=${B})"
+              printf '%s\tfail\n' "${case_name}" >> results.tsv
+            else
+              printf '%s\tpass\n' "${case_name}" >> results.tsv
             fi
             echo "::endgroup::"
           done
