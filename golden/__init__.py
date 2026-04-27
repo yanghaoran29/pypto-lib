@@ -14,6 +14,14 @@ and executes PyPTO programs with golden reference comparison.
 
 from .runner import RunConfig, RunResult, run
 from .tensor_spec import TensorSpec
+from .tiered_validation import (
+    TieredValidationResult,
+    AggregateValidationResult,
+    validate_single_tensor_tiered,
+    aggregate_tier_verdict,
+    tiered_validate_from_dirs,
+    plot_mismatch_map,
+)
 from .validation import validate_golden
 
 __all__ = [
@@ -22,4 +30,11 @@ __all__ = [
     "RunConfig",
     "RunResult",
     "run",
+    # Tiered validation
+    "TieredValidationResult",
+    "AggregateValidationResult",
+    "validate_single_tensor_tiered",
+    "aggregate_tier_verdict",
+    "tiered_validate_from_dirs",
+    "plot_mismatch_map",
 ]

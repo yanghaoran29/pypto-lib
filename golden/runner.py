@@ -38,6 +38,11 @@ class RunConfig:
             ``profiling``).
         runtime: Kwargs forwarded to :func:`pypto.runtime.execute_compiled`
             (e.g. ``platform``, ``device_id``, ``runtime_profiling``).
+        save_actual_tensors: If ``True`` (default), after device run and before
+            golden comparison, write each output tensor to
+            ``{work_dir}/data/actual/{name}.pt`` (CPU). Pairs with
+            ``{work_dir}/data/out/{name}.pt`` for mismatch heatmaps / tiered file
+            validation.
     """
 
     rtol: float = 1e-5
@@ -45,6 +50,7 @@ class RunConfig:
     compile_only: bool = False
     compile: dict[str, Any] = field(default_factory=dict)
     runtime: dict[str, Any] = field(default_factory=dict)
+    save_actual_tensors: bool = True
 
 
 @dataclass
@@ -247,6 +253,13 @@ def run(
             golden_fn(scratch)
             golden_outputs = {spec.name: scratch[spec.name] for spec in tensor_specs if spec.is_output}
             _save_tensors(work_dir / "data" / "out", golden_outputs)
+
+    # Device outputs on disk for golden heatmap / tiered_validate_from_dirs (same layout as data/out)
+    if config.save_actual_tensors:
+        actual_dir = work_dir / "data" / "actual"
+        actual_for_disk = {k: v.detach().cpu() for k, v in device_outputs.items()}
+        _save_tensors(actual_dir, actual_for_disk)
+        print(f"[RUN]   wrote device outputs (actual): {actual_dir}", flush=True)
 
     # Validate
     with _stage("validate"):
