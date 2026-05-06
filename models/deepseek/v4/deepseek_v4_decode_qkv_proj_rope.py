@@ -28,6 +28,9 @@ Q_LORA      = 1024             # v4-pro 1536
 HEAD_CHUNK  = 64
 Q_LORA_TILE = 32
 EPS         = 1e-6
+Q_OUT_SCALE = 0.05
+KV_OUT_SCALE = 0.2
+QR_OUT_SCALE = 0.2
 # Derived constants for multi-function type annotations
 Q_BLOCKS      = Q_LORA // Q_LORA_TILE
 HEAD_GROUP    = 8
@@ -126,15 +129,13 @@ def build_deepseek_v4_decode_qkv_proj_rope_program():
                     qr_normed = pl.col_expand_mul(pl.row_expand_mul(qr_chunk, qr_inv_rms_t), gamma_chunk)
                     qr_fp32 = pl.assemble(qr_fp32, qr_normed, [0, q0])
 
-            # NOTE: Stage 2.2 must follow normalization, because qr_fp32 now stores
-            # normalized values (after the pl.assemble above). Reordering these
-            # blocks would cast un-normalized accumulators and corrupt q_proj.
             # Stage 2.2: pre-cast qr for split AIV->AIC flow.
             for qb in pl.parallel(0, Q_BLOCKS, 1):
                 with pl.at(level=pl.Level.CORE_GROUP):
                     q0 = qb * Q_LORA_CHUNK
                     qr_chunk_fp32 = pl.slice(qr_fp32, [T, Q_LORA_CHUNK], [0, q0])
-                    qr = pl.assemble(qr, pl.cast(qr_chunk_fp32, target_type=pl.BF16), [0, q0])
+                    qr_scaled = pl.mul(qr_chunk_fp32, QR_OUT_SCALE)
+                    qr = pl.assemble(qr, pl.cast(qr_scaled, target_type=pl.BF16), [0, q0])
 
             # Stage 3: q_proj = qr @ wq_b (matmul + matmul_acc)
             q_proj_fp32 = pl.create_tensor([T, H * HEAD_DIM], dtype=pl.FP32)
@@ -171,6 +172,7 @@ def build_deepseek_v4_decode_qkv_proj_rope_program():
                         n0 = nb * HEAD_CHUNK
                         q_chunk = pl.slice(q_proj_fp32, [T, HEAD_CHUNK], [0, h0 + n0])
                         q_normed = pl.row_expand_mul(q_chunk, q_head_inv_rms_t)
+                        q_normed = pl.mul(q_normed, Q_OUT_SCALE)
                         q_flat = pl.assemble(q_flat, pl.cast(q_normed, target_type=pl.BF16), [0, h0 + n0])
 
                     q_lo = pl.slice(q_proj_fp32, [T, ROPE_HALF], [0, h0 + NOPE_DIM])
@@ -183,6 +185,8 @@ def build_deepseek_v4_decode_qkv_proj_rope_program():
                     sin_hi = pl.cast(pl.slice(rope_sin, [T, ROPE_HALF], [0, ROPE_HALF]), target_type=pl.FP32)
                     q_rot_lo = pl.sub(pl.mul(q_lo_norm, cos_lo), pl.mul(q_hi_norm, sin_lo))
                     q_rot_hi = pl.add(pl.mul(q_hi_norm, cos_hi), pl.mul(q_lo_norm, sin_hi))
+                    q_rot_lo = pl.mul(q_rot_lo, Q_OUT_SCALE)
+                    q_rot_hi = pl.mul(q_rot_hi, Q_OUT_SCALE)
                     q_flat = pl.assemble(q_flat, pl.cast(q_rot_lo, target_type=pl.BF16), [0, h0 + NOPE_DIM])
                     q_flat = pl.assemble(q_flat, pl.cast(q_rot_hi, target_type=pl.BF16), [0, h0 + NOPE_DIM + ROPE_HALF])
 
@@ -222,6 +226,7 @@ def build_deepseek_v4_decode_qkv_proj_rope_program():
                         [1, KV_CHUNK],
                     )
                     kv_normed = pl.col_expand_mul(pl.row_expand_mul(kv_chunk, kv_inv_rms_t), gamma_kv_chunk)
+                    kv_normed = pl.mul(kv_normed, KV_OUT_SCALE)
                     kv = pl.assemble(kv, pl.cast(kv_normed, target_type=pl.BF16), [0, n0])
             with pl.at(level=pl.Level.CORE_GROUP):
                 kv_lo = pl.slice(kv_fp32, [T, ROPE_HALF], [0, NOPE_DIM])
@@ -242,6 +247,8 @@ def build_deepseek_v4_decode_qkv_proj_rope_program():
                 sin_hi = pl.cast(pl.slice(rope_sin, [T, ROPE_HALF], [0, ROPE_HALF]), target_type=pl.FP32)
                 kv_rot_lo = pl.sub(pl.mul(kv_lo_norm, cos_lo), pl.mul(kv_hi_norm, sin_lo))
                 kv_rot_hi = pl.add(pl.mul(kv_hi_norm, cos_hi), pl.mul(kv_lo_norm, sin_hi))
+                kv_rot_lo = pl.mul(kv_rot_lo, KV_OUT_SCALE)
+                kv_rot_hi = pl.mul(kv_rot_hi, KV_OUT_SCALE)
                 kv = pl.assemble(kv, pl.cast(kv_rot_lo, target_type=pl.BF16), [0, NOPE_DIM])
                 kv = pl.assemble(kv, pl.cast(kv_rot_hi, target_type=pl.BF16), [0, NOPE_DIM + ROPE_HALF])
 
@@ -295,20 +302,20 @@ def golden_deepseek_v4_decode_qkv_proj_rope(tensors):
     token_x = rms_norm(x.view(T, D), norm_w)                        # [T, D]
 
     # Q path
-    qr_out = rms_norm(matmul_bf16_input_fp32(token_x, wq_a), gamma_cq)   # [T, Q_LORA]
+    qr_out = rms_norm(matmul_bf16_input_fp32(token_x, wq_a), gamma_cq) * QR_OUT_SCALE  # [T, Q_LORA]
     q_full = matmul_bf16_input_fp32(qr_out, wq_b).view(T, H, HEAD_DIM)   # [T, H, HEAD_DIM]
     inv = torch.rsqrt(q_full.square().mean(-1, keepdim=True) + EPS)
     q_full = q_full * inv                                            # per-head RMSNorm (no gamma)
     q_nope = q_full[..., :NOPE_DIM]
     q_rope = apply_rope(q_full[..., NOPE_DIM:], rope_cos, rope_sin)
-    q_out = torch.cat([q_nope, q_rope], dim=-1)
+    q_out = torch.cat([q_nope, q_rope], dim=-1) * Q_OUT_SCALE
 
     # KV path
     kv_full = rms_norm(matmul_bf16_input_fp32(token_x, wkv), gamma_ckv)  # [T, HEAD_DIM]
     kv_nope = kv_full[..., :NOPE_DIM]
     kv_rope_in = kv_full[..., NOPE_DIM:].unsqueeze(1)               # add a pseudo head dim
     kv_rope = apply_rope(kv_rope_in, rope_cos, rope_sin).squeeze(1)
-    kv_out = torch.cat([kv_nope, kv_rope], dim=-1)
+    kv_out = torch.cat([kv_nope, kv_rope], dim=-1) * KV_OUT_SCALE
 
     tensors["q"][:]  = q_out.to(torch.bfloat16)
     tensors["kv"][:] = kv_out.to(torch.bfloat16)
@@ -372,8 +379,8 @@ if __name__ == "__main__":
         config=RunConfig(
             # Tightened after fixing KV RoPE gamma_ckv application.
             # On-board a2a3 validation still shows small q-path BF16 drift at 5e-3.
-            rtol=6e-3,
-            atol=6e-3,
+            rtol=1e-3,
+            atol=1e-3,
             compile=dict(dump_passes=True),
             runtime=dict(
                 platform=args.platform,
