@@ -54,7 +54,7 @@ KV_OUT_CHUNK = 256
 KV_PROJ_K_CHUNK = 128
 Q_OUT_BLOCKS = HIDDEN // Q_OUT_CHUNK
 KV_OUT_BLOCKS = KV_HIDDEN // KV_OUT_CHUNK
-SPMD_CORES = 4
+SCOPE2_STAGE_SPMD = 32
 
 # Scope 2 tiles
 Q_HEAD_BATCH = 8
@@ -97,7 +97,6 @@ max_ctx_blocks = MAX_CTX_BLOCKS
 q_proj_inner_blocks = 4
 kv_proj_inner_blocks = 4
 q_pad_init_inner = 8
-rope_kv_inner = num_kv_heads // SPMD_CORES
 out_proj_inner_blocks = 1
 down_proj_inner_blocks = 2
 
@@ -115,7 +114,6 @@ mlp_group_chunk = mlp_spmd_inner * MLP_OUT_CHUNK
 assert q_out_blocks % q_proj_inner_blocks == 0
 assert kv_out_blocks % kv_proj_inner_blocks == 0
 assert (batch * total_q_groups) % q_pad_init_inner == 0
-assert num_kv_heads % SPMD_CORES == 0
 assert q_out_blocks % out_proj_inner_blocks == 0
 assert hidden_blocks % down_proj_inner_blocks == 0
 assert mlp_out_blocks % mlp_spmd_inner == 0
@@ -165,39 +163,37 @@ def build_qwen3_decode_program():
                     normed_states = pl.assemble(normed_states, pl.cast(normed, target_type=pl.BF16), [0, k0])
 
             # Q projection.
-            for q_base in pl.parallel(0, Q_OUT_BLOCKS, SPMD_CORES):
-                for qi in pl.spmd(SPMD_CORES, name_hint="q_proj"):
-                    q0 = (q_base + qi) * Q_OUT_CHUNK
-                    q_acc = pl.create_tensor([BATCH, Q_OUT_CHUNK], dtype=pl.FP32)
-                    for kb in pl.pipeline(0, HIDDEN // Q_PROJ_K_CHUNK, stage=2):
-                        k0 = kb * Q_PROJ_K_CHUNK
-                        tile_a_i = normed_states[:, k0 : k0 + Q_PROJ_K_CHUNK]
-                        tile_b_i = wq[k0 : k0 + Q_PROJ_K_CHUNK, q0 : q0 + Q_OUT_CHUNK]
-                        if k0 == 0:
-                            q_acc = pl.matmul(tile_a_i, tile_b_i, out_dtype=pl.FP32)
-                        else:
-                            q_acc = pl.matmul_acc(q_acc, tile_a_i, tile_b_i)
-                    q_proj = pl.assemble(q_proj, q_acc, [0, q0])
+            for qi in pl.spmd(Q_OUT_BLOCKS, name_hint="q_proj"):
+                q0 = qi * Q_OUT_CHUNK
+                q_acc = pl.create_tensor([BATCH, Q_OUT_CHUNK], dtype=pl.FP32)
+                for kb in pl.pipeline(0, HIDDEN // Q_PROJ_K_CHUNK, stage=2):
+                    k0 = kb * Q_PROJ_K_CHUNK
+                    tile_a_i = normed_states[:, k0 : k0 + Q_PROJ_K_CHUNK]
+                    tile_b_i = wq[k0 : k0 + Q_PROJ_K_CHUNK, q0 : q0 + Q_OUT_CHUNK]
+                    if k0 == 0:
+                        q_acc = pl.matmul(tile_a_i, tile_b_i, out_dtype=pl.FP32)
+                    else:
+                        q_acc = pl.matmul_acc(q_acc, tile_a_i, tile_b_i)
+                q_proj = pl.assemble(q_proj, q_acc, [0, q0])
 
             # K/V projection.
-            for kv_base in pl.parallel(0, KV_OUT_BLOCKS, SPMD_CORES):
-                for kvi in pl.spmd(SPMD_CORES, name_hint="kv_proj"):
-                    kv0 = (kv_base + kvi) * KV_OUT_CHUNK
-                    k_acc = pl.create_tensor([BATCH, KV_OUT_CHUNK], dtype=pl.FP32)
-                    v_acc = pl.create_tensor([BATCH, KV_OUT_CHUNK], dtype=pl.FP32)
-                    for kb in pl.pipeline(0, HIDDEN // KV_PROJ_K_CHUNK, stage=2):
-                        k0 = kb * KV_PROJ_K_CHUNK
-                        tile_a_i = normed_states[:, k0 : k0 + KV_PROJ_K_CHUNK]
-                        tile_wk_i = wk[k0 : k0 + KV_PROJ_K_CHUNK, kv0 : kv0 + KV_OUT_CHUNK]
-                        tile_wv_i = wv[k0 : k0 + KV_PROJ_K_CHUNK, kv0 : kv0 + KV_OUT_CHUNK]
-                        if k0 == 0:
-                            k_acc = pl.matmul(tile_a_i, tile_wk_i, out_dtype=pl.FP32)
-                            v_acc = pl.matmul(tile_a_i, tile_wv_i, out_dtype=pl.FP32)
-                        else:
-                            k_acc = pl.matmul_acc(k_acc, tile_a_i, tile_wk_i)
-                            v_acc = pl.matmul_acc(v_acc, tile_a_i, tile_wv_i)
-                    k_proj = pl.assemble(k_proj, k_acc, [0, kv0])
-                    v_proj = pl.assemble(v_proj, v_acc, [0, kv0])
+            for kvi in pl.spmd(KV_OUT_BLOCKS, name_hint="kv_proj"):
+                kv0 = kvi * KV_OUT_CHUNK
+                k_acc = pl.create_tensor([BATCH, KV_OUT_CHUNK], dtype=pl.FP32)
+                v_acc = pl.create_tensor([BATCH, KV_OUT_CHUNK], dtype=pl.FP32)
+                for kb in pl.pipeline(0, HIDDEN // KV_PROJ_K_CHUNK, stage=2):
+                    k0 = kb * KV_PROJ_K_CHUNK
+                    tile_a_i = normed_states[:, k0 : k0 + KV_PROJ_K_CHUNK]
+                    tile_wk_i = wk[k0 : k0 + KV_PROJ_K_CHUNK, kv0 : kv0 + KV_OUT_CHUNK]
+                    tile_wv_i = wv[k0 : k0 + KV_PROJ_K_CHUNK, kv0 : kv0 + KV_OUT_CHUNK]
+                    if k0 == 0:
+                        k_acc = pl.matmul(tile_a_i, tile_wk_i, out_dtype=pl.FP32)
+                        v_acc = pl.matmul(tile_a_i, tile_wv_i, out_dtype=pl.FP32)
+                    else:
+                        k_acc = pl.matmul_acc(k_acc, tile_a_i, tile_wk_i)
+                        v_acc = pl.matmul_acc(v_acc, tile_a_i, tile_wv_i)
+                k_proj = pl.assemble(k_proj, k_acc, [0, kv0])
+                v_proj = pl.assemble(v_proj, v_acc, [0, kv0])
 
             # ── Scope 2: RoPE + KV cache update + grouped-query attention ──
             all_q_padded = pl.create_tensor([BATCH * TOTAL_Q_GROUPS * Q_HEAD_PAD, HEAD_DIM], dtype=pl.BF16)
@@ -258,7 +254,7 @@ def build_qwen3_decode_program():
                     # Stage 2: QK matmul.
                     all_raw_scores0 = pl.create_tensor([MAX_CTX_BLOCKS * Q_HEAD_PAD, SEQ_TILE], dtype=pl.FP32)
                     all_raw_scores1 = pl.create_tensor([MAX_CTX_BLOCKS * Q_HEAD_PAD, SEQ_TILE], dtype=pl.FP32)
-                    for _qk in pl.spmd(1, level=pl.Level.CORE_GROUP, name_hint="qk_matmul"):
+                    for _qk in pl.spmd(SCOPE2_STAGE_SPMD, level=pl.Level.CORE_GROUP, name_hint="qk_matmul"):
                         for sb in pl.range(ctx_blocks):
                             s0 = sb * SEQ_TILE
                             cache_row0_0 = b * NUM_KV_HEADS * MAX_SEQ + kvh0 * MAX_SEQ + s0
@@ -278,7 +274,7 @@ def build_qwen3_decode_program():
                     all_exp_padded1 = pl.create_tensor([MAX_CTX_BLOCKS * Q_HEAD_PAD, SEQ_TILE], dtype=pl.BF16)
                     all_cur_li1 = pl.create_tensor([MAX_CTX_BLOCKS * Q_HEAD_BATCH, 1], dtype=pl.FP32)
                     all_cur_mi1 = pl.create_tensor([MAX_CTX_BLOCKS * Q_HEAD_BATCH, 1], dtype=pl.FP32)
-                    for _softmax in pl.spmd(1, level=pl.Level.CORE_GROUP, name_hint="softmax"):
+                    for _softmax in pl.spmd(SCOPE2_STAGE_SPMD, level=pl.Level.CORE_GROUP, name_hint="softmax"):
                         for sb in pl.range(ctx_blocks):
                             s0 = sb * SEQ_TILE
                             valid_len = pl.min(SEQ_TILE, ctx_len - s0)
@@ -310,7 +306,7 @@ def build_qwen3_decode_program():
                     # Stage 4: SV matmul.
                     all_oi_tmp0 = pl.create_tensor([MAX_CTX_BLOCKS * Q_HEAD_PAD, HEAD_DIM], dtype=pl.FP32)
                     all_oi_tmp1 = pl.create_tensor([MAX_CTX_BLOCKS * Q_HEAD_PAD, HEAD_DIM], dtype=pl.FP32)
-                    for _sv in pl.spmd(1, level=pl.Level.CORE_GROUP, name_hint="sv_matmul"):
+                    for _sv in pl.spmd(SCOPE2_STAGE_SPMD, level=pl.Level.CORE_GROUP, name_hint="sv_matmul"):
                         for sb in pl.range(ctx_blocks):
                             s0 = sb * SEQ_TILE
                             cache_row0_0 = b * NUM_KV_HEADS * MAX_SEQ + kvh0 * MAX_SEQ + s0
@@ -326,7 +322,7 @@ def build_qwen3_decode_program():
                             all_oi_tmp1 = pl.assemble(all_oi_tmp1, oi_tmp_1, [sb * Q_HEAD_PAD, 0])
 
                     # Stage 5: online softmax accumulation and normalisation.
-                    for _online in pl.spmd(1, level=pl.Level.CORE_GROUP, name_hint="online_softmax"):
+                    for _online in pl.spmd(SCOPE2_STAGE_SPMD, level=pl.Level.CORE_GROUP, name_hint="online_softmax"):
                         oi_0 = all_oi_tmp0[0 : Q_HEAD_BATCH, :]
                         mi_0 = all_cur_mi0[0 : Q_HEAD_BATCH, :]
                         li_0 = all_cur_li0[0 : Q_HEAD_BATCH, :]
