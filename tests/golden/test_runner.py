@@ -349,6 +349,37 @@ class TestGoldenFnPath:
         assert not r.passed
         assert "does not match golden" in (r.error or "")
 
+    def test_golden_fn_mismatch_with_mismatch_heatmap_writes_actual_and_png(
+        self, three_kinds_specs, tmp_path,
+    ):
+        """When validation fails and ``mismatch_heatmap=True``, persist actual tensors and tiered PNGs."""
+        compiled_dir = tmp_path / "build"
+        compiled_dir.mkdir()
+
+        def golden_fn(tensors):
+            tensors["y"][:] = tensors["x"] + 1
+            tensors["state"][:] = tensors["state"] + 100
+
+        def bad_execute(work_dir, tensors, **_kwargs):
+            tensors[1][:] = tensors[0] - 99
+            tensors[2][:] = tensors[2] + 100
+
+        fake = _FakeCompiled(compiled_dir)
+        with patch("pypto.ir.compile", return_value=fake), \
+             patch("pypto.runtime.execute_compiled", side_effect=bad_execute):
+            r = run(
+                program=object(),
+                specs=three_kinds_specs,
+                golden_fn=golden_fn,
+                config=RunConfig(mismatch_heatmap=True, rtol=1e-5, atol=1e-5),
+            )
+
+        assert not r.passed
+        assert (compiled_dir / "data" / "actual" / "y.pt").is_file()
+        assert (compiled_dir / "data" / "actual" / "state.pt").is_file()
+        assert (compiled_dir / "report" / "mismatch_y.png").is_file()
+        assert (compiled_dir / "report" / "mismatch_state.png").is_file()
+
 
 class TestNoValidation:
     """Neither ``golden_fn`` nor ``golden_data`` — validation is skipped."""

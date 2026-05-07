@@ -43,6 +43,10 @@ class RunConfig:
             :func:`golden.validation.validate_golden` for the callable
             signature, and :func:`golden.validation.topk_pair_compare` for
             a built-in helper covering top-k index/value outputs.
+        mismatch_heatmap: When ``True`` and golden validation fails, persist
+            device outputs under ``data/actual/{name}.pt`` and render tiered
+            mismatch PNGs under ``report/mismatch_{name}.png`` (same color
+            tiers as the golden-tiered-validation skill). Requires matplotlib.
     """
 
     rtol: float = 1e-5
@@ -51,6 +55,7 @@ class RunConfig:
     compile: dict[str, Any] = field(default_factory=dict)
     runtime: dict[str, Any] = field(default_factory=dict)
     compare_fn: dict[str, Callable] = field(default_factory=dict)
+    mismatch_heatmap: bool = False
 
 
 @dataclass
@@ -76,6 +81,35 @@ def _save_tensors(dest_dir: Path, tensors: dict[str, torch.Tensor]) -> None:
     dest_dir.mkdir(parents=True, exist_ok=True)
     for name, tensor in tensors.items():
         torch.save(tensor, dest_dir / f"{name}.pt")
+
+
+def _save_actual_and_mismatch_heatmaps(
+    work_dir: Path,
+    device_outputs: dict[str, torch.Tensor],
+    golden_outputs: dict[str, torch.Tensor],
+    rtol: float,
+    atol: float,
+) -> None:
+    """Write ``data/actual/*.pt`` and optional tiered mismatch PNGs under ``report/``."""
+    actual_tensors = {k: v.detach().cpu().clone() for k, v in device_outputs.items()}
+    _save_tensors(work_dir / "data" / "actual", actual_tensors)
+    print(f"[RUN]   saved actual tensors: {work_dir / 'data' / 'actual'}", flush=True)
+    try:
+        from .plot_golden_mismatch_heatmap import plot_mismatch_map_tensors
+    except ImportError as e:
+        print(f"[RUN]   mismatch heatmap skipped (import failed): {e}", flush=True)
+        return
+    report_dir = work_dir / "report"
+    for name in sorted(device_outputs.keys()):
+        g = golden_outputs.get(name)
+        a = device_outputs.get(name)
+        if not isinstance(g, torch.Tensor) or not isinstance(a, torch.Tensor):
+            continue
+        out_png = report_dir / f"mismatch_{name}.png"
+        try:
+            plot_mismatch_map_tensors(g, a, rtol=rtol, atol=atol, out_png=out_png)
+        except Exception as e:
+            print(f"[RUN]   mismatch heatmap failed for {name!r}: {e}", flush=True)
 
 
 def _load_tensors(src_dir: Path, subdir: str, names: list[str]) -> dict[str, torch.Tensor]:
@@ -309,6 +343,14 @@ def run(
                 inputs=input_tensors,
             )
         except AssertionError as e:
+            if config.mismatch_heatmap:
+                _save_actual_and_mismatch_heatmaps(
+                    work_dir,
+                    device_outputs,
+                    golden_outputs,
+                    rtol=config.rtol,
+                    atol=config.atol,
+                )
             return _fail(str(e))
 
     total = time.time() - start
