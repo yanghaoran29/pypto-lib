@@ -107,12 +107,18 @@ q_pad_init_spmd_blocks = (batch * total_q_groups) // q_pad_init_inner
 out_proj_spmd_blocks = q_out_blocks // out_proj_inner_blocks
 down_proj_spmd_blocks = hidden_blocks // down_proj_inner_blocks
 
+# Keep the copied Stage4~6 grouped-MLP path consistent with spmd copy.
+BATCH_TILE = BATCH
+mlp_spmd_inner = 2
+mlp_group_chunk = mlp_spmd_inner * MLP_OUT_CHUNK
+
 assert q_out_blocks % q_proj_inner_blocks == 0
 assert kv_out_blocks % kv_proj_inner_blocks == 0
 assert (batch * total_q_groups) % q_pad_init_inner == 0
 assert num_kv_heads % SPMD_CORES == 0
 assert q_out_blocks % out_proj_inner_blocks == 0
 assert hidden_blocks % down_proj_inner_blocks == 0
+assert mlp_out_blocks % mlp_spmd_inner == 0
 
 def build_qwen3_decode_program():
     @pl.program
@@ -396,51 +402,97 @@ def build_qwen3_decode_program():
                     post_normed = pl.col_expand_mul(pl.row_expand_mul(resid_chunk, inv_rms_s3_col), post_gamma)
                     post_norm_tile = pl.assemble(post_norm_tile, pl.cast(post_normed, target_type=pl.BF16), [0, k0])
 
-            # Stage 4 & 5 & 6: MLP gate/up projections + SiLU.
+            # Stage 4~6: keep outer parallel, run smaller SPMD groups and cache per-group only.
             mlp_tile = pl.create_tensor([BATCH, INTERMEDIATE], dtype=pl.BF16)
-            for o0 in pl.parallel(0, INTERMEDIATE, MLP_OUT_CHUNK):
-                with pl.at(level=pl.Level.CORE_GROUP, name_hint="gate_proj"):
-                    gate_acc = pl.create_tensor([BATCH, MLP_OUT_CHUNK], dtype=pl.FP32)
-                    for kb in pl.pipeline(0, HIDDEN // K_CHUNK, stage=2):
-                        k0 = kb * K_CHUNK
-                        post_chunk = post_norm_tile[:, k0 : k0 + K_CHUNK]
-                        wg = w_gate[k0 : k0 + K_CHUNK, o0 : o0 + MLP_OUT_CHUNK]
-                        if k0 == 0:
-                            gate_acc = pl.matmul(post_chunk, wg, out_dtype=pl.FP32)
-                        else:
-                            gate_acc = pl.matmul_acc(gate_acc, post_chunk, wg)
+            for ob_base in pl.parallel(0, mlp_out_blocks, mlp_spmd_inner):
+                gate_group = pl.create_tensor([BATCH_TILE, mlp_group_chunk], dtype=pl.FP32)
+                up_group = pl.create_tensor([BATCH_TILE, mlp_group_chunk], dtype=pl.FP32)
 
-                with pl.at(level=pl.Level.CORE_GROUP, name_hint="up_proj"):
-                    up_acc = pl.create_tensor([BATCH, MLP_OUT_CHUNK], dtype=pl.FP32)
-                    for kb in pl.pipeline(0, HIDDEN // K_CHUNK, stage=2):
-                        k0 = kb * K_CHUNK
-                        post_chunk = post_norm_tile[:, k0 : k0 + K_CHUNK]
-                        wu = w_up[k0 : k0 + K_CHUNK, o0 : o0 + MLP_OUT_CHUNK]
-                        if k0 == 0:
-                            up_acc = pl.matmul(post_chunk, wu, out_dtype=pl.FP32)
-                        else:
-                            up_acc = pl.matmul_acc(up_acc, post_chunk, wu)
+                # Stage 4: gate projection.
+                # with pl.at(level=pl.Level.CORE_GROUP, name_hint="gate_proj"):
+                for ob in pl.spmd(mlp_spmd_inner, name_hint="gate_proj_spmd"):
+                    o0 = (ob_base + ob) * MLP_OUT_CHUNK
+                    g0 = ob * MLP_OUT_CHUNK
+                    post_chunk_0 = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, 0])
+                    post_chunk_1 = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, K_CHUNK])
+                    wg_0 = pl.slice(w_gate, [K_CHUNK, MLP_OUT_CHUNK], [0, o0])
+                    gate_acc = pl.matmul(post_chunk_0, wg_0, out_dtype=pl.FP32)
 
-                with pl.at(level=pl.Level.CORE_GROUP, name_hint="silu"):
+                    wg_1 = pl.slice(w_gate, [K_CHUNK, MLP_OUT_CHUNK], [K_CHUNK, o0])
+                    gate_acc = pl.matmul_acc(gate_acc, post_chunk_1, wg_1)
+
+                    for kb in pl.pipeline(2, hidden_blocks, stage=2):
+                        k0 = kb * K_CHUNK
+                        post_chunk = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, k0])
+                        wg = pl.slice(w_gate, [K_CHUNK, MLP_OUT_CHUNK], [k0, o0])
+                        gate_acc = pl.matmul_acc(gate_acc, post_chunk, wg)
+                    gate_group = pl.assemble(gate_group, gate_acc, [0, g0])
+
+                # Stage 5: up projection.
+                # with pl.at(level=pl.Level.CORE_GROUP, name_hint="up_proj"):
+                for ob in pl.spmd(mlp_spmd_inner, name_hint="up_proj_spmd"):
+                    o0 = (ob_base + ob) * MLP_OUT_CHUNK
+                    g0 = ob * MLP_OUT_CHUNK
+                    post_chunk_0 = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, 0])
+                    post_chunk_1 = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, K_CHUNK])
+                    wu_0 = pl.slice(w_up, [K_CHUNK, MLP_OUT_CHUNK], [0, o0])
+                    up_acc = pl.matmul(post_chunk_0, wu_0, out_dtype=pl.FP32)
+
+                    wu_1 = pl.slice(w_up, [K_CHUNK, MLP_OUT_CHUNK], [K_CHUNK, o0])
+                    up_acc = pl.matmul_acc(up_acc, post_chunk_1, wu_1)
+
+                    for kb in pl.pipeline(2, hidden_blocks, stage=2):
+                        k0 = kb * K_CHUNK
+                        post_chunk = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, k0])
+                        wu = pl.slice(w_up, [K_CHUNK, MLP_OUT_CHUNK], [k0, o0])
+                        up_acc = pl.matmul_acc(up_acc, post_chunk, wu)
+                    up_group = pl.assemble(up_group, up_acc, [0, g0])
+
+                # Stage 6: SiLU + gate/up fuse.
+                # with pl.at(level=pl.Level.CORE_GROUP, name_hint="silu"):
+                for ob in pl.spmd(mlp_spmd_inner, name_hint="silu_spmd"):
+                    o0 = (ob_base + ob) * MLP_OUT_CHUNK
+                    g0 = ob * MLP_OUT_CHUNK
+                    gate_acc = pl.slice(gate_group, [BATCH_TILE, MLP_OUT_CHUNK], [0, g0])
+                    up_acc = pl.slice(up_group, [BATCH_TILE, MLP_OUT_CHUNK], [0, g0])
                     sigmoid = pl.recip(pl.add(pl.exp(pl.neg(gate_acc)), 1.0))
                     mlp_chunk = pl.mul(pl.mul(gate_acc, sigmoid), up_acc)
-                    mlp_tile = pl.assemble(mlp_tile, pl.cast(mlp_chunk, target_type=pl.BF16), [0, o0])
+                    mlp_chunk_bf16 = pl.cast(mlp_chunk, target_type=pl.BF16)
+                    mlp_tile = pl.assemble(mlp_tile, mlp_chunk_bf16, [0, o0])
 
-            # Stage 7 & 8: Down projection + final residual writeback.  
-            for dbi in pl.spmd(DOWN_PROJ_BLOCKS, level=pl.Level.CORE_GROUP, optimizations=[pl.split(pl.SplitMode.UP_DOWN)], name_hint="down_proj_residual"):
-                d0 = dbi * DOWN_N_CHUNK
-                resid1_tile_chunk = resid1_tile[:, d0 : d0 + DOWN_N_CHUNK]
-                down_acc = pl.create_tensor([BATCH, DOWN_N_CHUNK], dtype=pl.FP32)
-                for ob in pl.pipeline(0, INTERMEDIATE // DOWN_K_CHUNK, stage=2):
-                    o0 = ob * DOWN_K_CHUNK
-                    down_mlp_chunk = mlp_tile[:, o0 : o0 + DOWN_K_CHUNK]
-                    w_down_chunk = w_down[o0 : o0 + DOWN_K_CHUNK, d0 : d0 + DOWN_N_CHUNK]
-                    if o0 == 0:
-                        down_acc = pl.matmul(down_mlp_chunk, w_down_chunk, out_dtype=pl.FP32)
-                    else:
-                        down_acc = pl.matmul_acc(down_acc, down_mlp_chunk, w_down_chunk)
-                out_chunk = pl.add(down_acc, resid1_tile_chunk)
-                out = pl.assemble(out, pl.cast(out_chunk, target_type=pl.BF16), [0, d0])
+            # Stage 7 & 8: Down projection + final residual writeback.
+            for db in pl.parallel(0, HIDDEN // DOWN_N_CHUNK, 2):
+                with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.auto_chunk, pl.split(pl.SplitMode.UP_DOWN)], name_hint="down_proj_residual"):
+                    for di in pl.range(db, db + 2):
+                        d0 = di * DOWN_N_CHUNK
+                        resid1_tile_chunk = resid1_tile[:, d0 : d0 + DOWN_N_CHUNK]
+                        down_acc = pl.create_tensor([BATCH, DOWN_N_CHUNK], dtype=pl.FP32)
+                        for ob in pl.pipeline(0, INTERMEDIATE // DOWN_K_CHUNK, stage=2):
+                            o0 = ob * DOWN_K_CHUNK
+                            down_mlp_chunk = mlp_tile[:, o0 : o0 + DOWN_K_CHUNK]
+                            w_down_chunk = w_down[o0 : o0 + DOWN_K_CHUNK, d0 : d0 + DOWN_N_CHUNK]
+                            if o0 == 0:
+                                down_acc = pl.matmul(down_mlp_chunk, w_down_chunk, out_dtype=pl.FP32)
+                            else:
+                                down_acc = pl.matmul_acc(down_acc, down_mlp_chunk, w_down_chunk)
+                        out_chunk = pl.add(down_acc, resid1_tile_chunk)
+                        out = pl.assemble(out, pl.cast(out_chunk, target_type=pl.BF16), [0, d0])
+
+            # # Stage 7 & 8: Down projection + final residual writeback.  
+            # for dbi in pl.spmd(DOWN_PROJ_BLOCKS, level=pl.Level.CORE_GROUP, optimizations=[pl.split(pl.SplitMode.UP_DOWN)], name_hint="down_proj_residual"):
+            #     d0 = dbi * DOWN_N_CHUNK
+            #     resid1_tile_chunk = resid1_tile[:, d0 : d0 + DOWN_N_CHUNK]
+            #     down_acc = pl.create_tensor([BATCH, DOWN_N_CHUNK], dtype=pl.FP32)
+            #     for ob in pl.pipeline(0, INTERMEDIATE // DOWN_K_CHUNK, stage=2):
+            #         o0 = ob * DOWN_K_CHUNK
+            #         down_mlp_chunk = mlp_tile[:, o0 : o0 + DOWN_K_CHUNK]
+            #         w_down_chunk = w_down[o0 : o0 + DOWN_K_CHUNK, d0 : d0 + DOWN_N_CHUNK]
+            #         if o0 == 0:
+            #             down_acc = pl.matmul(down_mlp_chunk, w_down_chunk, out_dtype=pl.FP32)
+            #         else:
+            #             down_acc = pl.matmul_acc(down_acc, down_mlp_chunk, w_down_chunk)
+            #     out_chunk = pl.add(down_acc, resid1_tile_chunk)
+            #     out = pl.assemble(out, pl.cast(out_chunk, target_type=pl.BF16), [0, d0])
 
             return out
 
