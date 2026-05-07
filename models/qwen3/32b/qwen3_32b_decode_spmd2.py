@@ -258,7 +258,7 @@ def build_qwen3_decode_program():
                     # Stage 2: QK matmul.
                     all_raw_scores0 = pl.create_tensor([MAX_CTX_BLOCKS * Q_HEAD_PAD, SEQ_TILE], dtype=pl.FP32)
                     all_raw_scores1 = pl.create_tensor([MAX_CTX_BLOCKS * Q_HEAD_PAD, SEQ_TILE], dtype=pl.FP32)
-                    with pl.at(level=pl.Level.CORE_GROUP, name_hint="qk_matmul"):
+                    for _qk in pl.spmd(1, level=pl.Level.CORE_GROUP, name_hint="qk_matmul"):
                         for sb in pl.range(ctx_blocks):
                             s0 = sb * SEQ_TILE
                             cache_row0_0 = b * NUM_KV_HEADS * MAX_SEQ + kvh0 * MAX_SEQ + s0
@@ -278,7 +278,7 @@ def build_qwen3_decode_program():
                     all_exp_padded1 = pl.create_tensor([MAX_CTX_BLOCKS * Q_HEAD_PAD, SEQ_TILE], dtype=pl.BF16)
                     all_cur_li1 = pl.create_tensor([MAX_CTX_BLOCKS * Q_HEAD_BATCH, 1], dtype=pl.FP32)
                     all_cur_mi1 = pl.create_tensor([MAX_CTX_BLOCKS * Q_HEAD_BATCH, 1], dtype=pl.FP32)
-                    with pl.at(level=pl.Level.CORE_GROUP, name_hint="softmax"):
+                    for _softmax in pl.spmd(1, level=pl.Level.CORE_GROUP, name_hint="softmax"):
                         for sb in pl.range(ctx_blocks):
                             s0 = sb * SEQ_TILE
                             valid_len = pl.min(SEQ_TILE, ctx_len - s0)
@@ -310,7 +310,7 @@ def build_qwen3_decode_program():
                     # Stage 4: SV matmul.
                     all_oi_tmp0 = pl.create_tensor([MAX_CTX_BLOCKS * Q_HEAD_PAD, HEAD_DIM], dtype=pl.FP32)
                     all_oi_tmp1 = pl.create_tensor([MAX_CTX_BLOCKS * Q_HEAD_PAD, HEAD_DIM], dtype=pl.FP32)
-                    with pl.at(level=pl.Level.CORE_GROUP, name_hint="sv_matmul"):
+                    for _sv in pl.spmd(1, level=pl.Level.CORE_GROUP, name_hint="sv_matmul"):
                         for sb in pl.range(ctx_blocks):
                             s0 = sb * SEQ_TILE
                             cache_row0_0 = b * NUM_KV_HEADS * MAX_SEQ + kvh0 * MAX_SEQ + s0
@@ -326,7 +326,7 @@ def build_qwen3_decode_program():
                             all_oi_tmp1 = pl.assemble(all_oi_tmp1, oi_tmp_1, [sb * Q_HEAD_PAD, 0])
 
                     # Stage 5: online softmax accumulation and normalisation.
-                    with pl.at(level=pl.Level.CORE_GROUP, name_hint="online_softmax"):
+                    for _online in pl.spmd(1, level=pl.Level.CORE_GROUP, name_hint="online_softmax"):
                         oi_0 = all_oi_tmp0[0 : Q_HEAD_BATCH, :]
                         mi_0 = all_cur_mi0[0 : Q_HEAD_BATCH, :]
                         li_0 = all_cur_li0[0 : Q_HEAD_BATCH, :]
@@ -373,10 +373,10 @@ def build_qwen3_decode_program():
                         o0 = oi * Q_OUT_CHUNK
                         hidden_chunk = hidden_states[:, o0 : o0 + Q_OUT_CHUNK]
                         o_acc = pl.create_tensor([BATCH, Q_OUT_CHUNK], dtype=pl.FP32)
-                        for kb in pl.pipeline(0, HIDDEN // OUT_PROJ_K_CHUNK, stage=2):
-                            k0 = kb * OUT_PROJ_K_CHUNK
-                            a_chunk = attn_out[:, k0 : k0 + OUT_PROJ_K_CHUNK]
-                            w_chunk = wo[k0 : k0 + OUT_PROJ_K_CHUNK, o0 : o0 + Q_OUT_CHUNK]
+                        for kb in pl.pipeline(0, hidden_blocks, stage=2):
+                            k0 = kb * K_CHUNK
+                            a_chunk = attn_out[:, k0 : k0 + K_CHUNK]
+                            w_chunk = wo[k0 : k0 + K_CHUNK, o0 : o0 + Q_OUT_CHUNK]
                             if k0 == 0:
                                 o_acc = pl.matmul(a_chunk, w_chunk, out_dtype=pl.FP32)
                             else:
