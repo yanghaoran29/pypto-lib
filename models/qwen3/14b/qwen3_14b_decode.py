@@ -44,7 +44,7 @@ USER_BATCH_DYN = pl.dynamic("USER_BATCH_DYN")
 KV_CACHE_ROWS_DYN = pl.dynamic("KV_CACHE_ROWS_DYN")
 BLOCK_TABLE_FLAT_DYN = pl.dynamic("BLOCK_TABLE_FLAT_DYN")
 
-BATCH = 16
+BATCH = 48
 MAX_SEQ = 4096
 NUM_HEADS = 40
 NUM_KV_HEADS = 8
@@ -109,7 +109,7 @@ def build_qwen3_decode_program(
     half_dim = head_dim // 2
     head_dim_inv = 1.0 / head_dim
     q_per_kv = num_heads // num_kv_heads
-    q_groups = q_per_kv // Q_HEAD_BATCH
+    q_groups = q_per_kv // Q_HEAD_BATCH 
     total_q_groups = num_kv_heads * q_groups
     attn_scale = 1.0 / (head_dim ** 0.5)
     max_ctx_blocks = max_blocks_per_seq
@@ -304,7 +304,7 @@ def build_qwen3_decode_program(
                 pos = ctx_len - 1
                 ctx_blocks = (ctx_len + BLOCK_SIZE - 1) // BLOCK_SIZE
                 block_table_base = b * max_blocks_per_seq
-                slot = pl.tensor.read(slot_mapping, [b])
+                slot = pl.tensor.read(slot_mapping, [b])    # slot_mapping：Assemble的位置（位置随机，可能构建依赖也可能不构建）
                 slot_block = slot // BLOCK_SIZE
                 slot_offset = slot - slot_block * BLOCK_SIZE
                 cos_row = rope_cos[pos : pos + 1, :]
@@ -314,7 +314,7 @@ def build_qwen3_decode_program(
                 sin_lo = sin_row[:, 0:half_dim]
                 sin_hi = sin_row[:, half_dim:head_dim]
 
-                with pl.at(level=pl.Level.CORE_GROUP, name_hint="rope_kv_cache"):
+                with pl.at(level=pl.Level.CORE_GROUP, name_hint="rope_kv_cache"):   # rope_kv_cache: 更新之后后面才会开始
                     for ki in pl.range(num_kv_heads):
                         kv_col = ki * head_dim
                         cache_row = (slot_block * num_kv_heads + ki) * BLOCK_SIZE + slot_offset
@@ -333,7 +333,7 @@ def build_qwen3_decode_program(
                             pl.cast(rot_lo, target_type=pl.BF16),
                             [cache_row, 0],
                         )
-                        k_cache = pl.assemble(
+                        k_cache = pl.assemble(     # kv_cache的偏移是否为动态？
                             k_cache,
                             pl.cast(rot_hi, target_type=pl.BF16),
                             [cache_row, half_dim],
@@ -381,7 +381,7 @@ def build_qwen3_decode_program(
                         )
 
                 attn_row = pl.create_tensor([1, hidden], dtype=pl.BF16)
-                for gi in pl.parallel(0, total_q_groups, 2):
+                for gi in pl.parallel(0, total_q_groups, 2):  # total_q_groups = num_kv_heads * q_groups
                     gi0 = gi
                     gi1 = gi + 1
 
@@ -405,7 +405,7 @@ def build_qwen3_decode_program(
                             pbid = pl.cast(pl.tensor.read(block_table, [block_table_idx]), pl.INDEX)
 
                             cache_row0 = (pbid * num_kv_heads + kvh0) * BLOCK_SIZE
-                            k_tile0 = k_cache[cache_row0 : cache_row0 + BLOCK_SIZE, :]
+                            k_tile0 = k_cache[cache_row0 : cache_row0 + BLOCK_SIZE, :]     # 与前面的block_table是否取得一块数据？block_table里面数值是否允许重复？（无法确定block_table里面数值不重复）
                             raw_scores0 = pl.matmul(q_padded0, k_tile0, b_trans=True, out_dtype=pl.FP32)
                             all_raw_scores0 = pl.assemble(all_raw_scores0, raw_scores0, [sb * Q_HEAD_PAD, 0])
 
@@ -922,7 +922,7 @@ def golden_qwen3_decode(tensors):
                     valid_len = min(BLOCK_SIZE, ctx_len - s0)
                     pbid = int(block_table[b * max_ctx_blocks + sb].item())
                     cache_row0 = (pbid * num_kv_heads + kvh) * BLOCK_SIZE
-                    k_tile = k_cache[cache_row0 : cache_row0 + BLOCK_SIZE, :]
+                    k_tile = k_cache[cache_row0 : cache_row0 + BLOCK_SIZE, :]   #(BLOCK_SIZE,head_dim)
                     v_tile = v_cache[cache_row0 : cache_row0 + BLOCK_SIZE, :]
 
                     raw_scores = q_grp_bf16.float() @ k_tile.float().T

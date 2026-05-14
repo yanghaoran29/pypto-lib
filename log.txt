@@ -1,0 +1,125 @@
+[RUN] compile ...
+[RUN] compile done (1.06s)
+[RUN] generate inputs ...
+[RUN] generate inputs done (5.03s)
+[RUN] runtime ...
+
+✓ Conversion complete
+  Input:  /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/build_output/Qwen3Decode_20260513_160552/swimlane_data/l2_perf_records.json
+  Output: /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/build_output/Qwen3Decode_20260513_160552/swimlane_data/merged_swimlane_20260513_160603.json
+
+To visualize: Open https://ui.perfetto.dev/ and drag in /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/build_output/Qwen3Decode_20260513_160552/swimlane_data/merged_swimlane_20260513_160603.json
+
+Device log: /data/y00955915/ascend_work/log/debug/device-13/device-1840397_20260513160615696.log
+Selection: explicit --device-log file
+Inferred Device ID: 13
+
+==============================================================================================================
+Task Statistics by Function
+  Exec = kernel time on AICore; Latency = dispatch->finish (incl. head OH + Exec + tail OH)
+==============================================================================================================
+Func_ID  Func_Name    Count   Avg Exec(us)  Avg Latency(us)   Exec%   Avg Head OH(us)  Avg Tail OH(us)
+--------------------------------------------------------------------------------------------------------------
+0        rmsnorm          3          19.36            24.23   79.9%              0.73             4.14
+1        q_proj          60          30.55            53.12   57.5%             19.51             3.07
+2        k_proj          12          27.59            48.28   57.1%             18.64             2.05
+3        v_proj          12          27.63            46.35   59.6%             16.61             2.12
+4        qk_norm          3          12.41            14.36   86.4%              0.83             1.12
+5        rope_kv_cache    48           8.16            11.40   71.5%              0.45             2.80
+6        qk_matmul      192          21.43            25.55   83.9%              1.32             2.80
+7        softmax        192          13.89            17.56   79.1%              0.40             3.27
+8        sv_matmul      192          21.27            24.96   85.2%              0.85             2.84
+9        online_softmax   192           7.80            11.22   69.5%              0.44             2.98
+10       out_proj_residual_aic    60          50.39           107.44   46.9%             50.87             6.18
+11       out_proj_residual_aiv   120          98.40           107.91   91.2%              1.94             7.56
+12       post_rmsnorm     3          17.45            26.97   64.7%              0.87             8.65
+13       gate_proj      204          50.47            96.59   52.3%             40.00             6.12
+14       up_proj        204          50.23            96.16   52.2%             40.55             5.38
+15       silu           204           2.31             8.07   28.6%              1.62             4.15
+16       down_proj       60         144.22           175.10   82.4%             27.27             3.61
+17       down_proj_residual    60           4.06             8.73   46.5%              0.51             4.15
+--------------------------------------------------------------------------------------------------------------
+TOTAL                  1821       60141.46         91683.72
+
+Total Test Time: 3365.96 us (from earliest dispatch to latest finish)
+
+--- Task execution vs Scheduler overhead ---
+  Per-task (all):  Avg Exec = 33.03 us,  Avg Latency (dispatch->finish) = 50.35 us,  Exec/Latency = 65.60%
+  (Latency = dispatch→finish; Sched CPU = scheduler thread CPU per task)
+==============================================================================================================
+
+=== Scheduler Overhead Deep Dive ===
+Perf data:  /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/build_output/Qwen3Decode_20260513_160552/swimlane_data/l2_perf_records.json
+Device log: /data/y00955915/ascend_work/log/debug/device-13/device-1840397_20260513160615696.log
+Selection:  explicit --device-log file
+Device ID:  13
+
+==========================================================================================
+Part 1: Per-task time breakdown (from perf profiling data)
+==========================================================================================
+Total tasks: 1821
+Wall-clock:  3366.0 us
+
+  Component                             Total (us)  Avg/task (us)  % of Latency
+  ------------------------------------------------------------------------------
+  Kernel Exec (end-start)                  60141.5          33.03         65.6%
+  Head OH (start-dispatch)                 23914.7          13.13         26.1%
+  Tail OH (finish-end)                      7627.5           4.19          8.3%
+
+==========================================================================================
+Part 2: AICPU scheduler loop breakdown (from perf JSON phase data)
+  3 scheduler threads
+==========================================================================================
+
+  Thread       Loops  Completed   Tasks/loop  Total (us)
+  ------------------------------------------------------
+  T0            3826        384          0.1      2581.4
+  T1            3650        649          0.2      3372.4
+  T2            3036        668          0.2      3381.6
+  SUM          10512       1701          0.2      9335.4
+
+  Phase                                               Total (us) % of total  Avg/task (us)
+  -----------------------------------------------------------------------------------------
+  Complete (poll handshake, resolve deps)                 2527.9      27.1%           1.49
+  Scan (update perf header)                                  0.0       0.0%           0.00
+  Dispatch (pop queue, build payload, flush)              1677.6      18.0%           0.99
+  Idle (spinning, no progress)                            5129.9      55.0%           3.02
+
+  Fanout (notify consumers): total edges=0, max_degree=0, avg_degree=0.0
+  Fanin  (release producers): total edges=0, max_degree=0, avg_degree=0.0
+
+  Pop: hit=0, miss=0, hit_rate=0.0%
+
+==========================================================================================
+Part 3: Tail OH distribution & cause analysis
+==========================================================================================
+
+  Tail OH distribution (N=1821):
+    P10        0.8 us
+    P25        1.2 us
+    P50        2.6 us
+    P75        4.9 us
+    P90        8.9 us
+    P95       12.4 us
+    P99       30.3 us
+    Max:      59.1 us
+    Mean:      4.2 us
+
+  Avg scheduler loop iteration: 0.9 us (approx avg polling interval per loop)
+
+  Avg Tail OH = 4.2 us ~= 4.7 x avg loop iteration (0.9 us)
+  -> On average, a completed task waits ~4.7 loop iterations before being detected
+
+  Key insight: Complete phase consumes ~27% of scheduler CPU.
+  Fanout: avg_degree=0.0, max_degree=0.
+  Fanin:  avg_degree=0.0, max_degree=0.
+  Fanout traversal and atomic ops dominate the complete phase.
+==========================================================================================
+Swimlane JSON written to: /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/build_output/Qwen3Decode_20260513_160552/swimlane_data/merged_swimlane_20260513_160603.json
+[RUN] runtime done (18.71s)
+[RUN] compute golden ...
+[RUN] compute golden done (39.45s)
+[RUN] validate ...
+[RUN]   'out' PASS  shape=(48, 5120) dtype=torch.bfloat16
+[RUN] validate done (0.03s)
+[RUN] PASS (64.27s)

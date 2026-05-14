@@ -1,4 +1,279 @@
-任务已提交: task_20260511_163635_16175855568 (断开后可用 task-submit --wait task_20260511_163635_16175855568 重连)
-等待任务执行: task_20260511_163635_16175855568 (Ctrl+C 终止任务)
-[npu-lock] 获取设备 15 的锁 (无超时)...
-[npu-lock] 已获取设备 15 的锁 (pid=1617801)
+任务已提交: task_20260511_191400_317182515855 (断开后可用 task-submit --wait task_20260511_191400_317182515855 重连)
+等待任务执行: task_20260511_191400_317182515855 (Ctrl+C 终止任务)
+[npu-lock] 获取设备 12 的锁 (无超时)...
+[npu-lock] 已获取设备 12 的锁 (pid=3171995)
+[RUN] compile ...
+2026-05-11 19:14:05.269 W | No TileType variables found, skipping memory reuse
+2026-05-11 19:14:05.273 W | No TileType variables found, skipping memory reuse
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:402:20
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:402:20
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 128B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:331:34
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 128B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:336:34
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:341:34
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 128B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:364:39
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 128B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:369:39
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:374:39
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:442:42
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:443:42
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:459:42
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:460:42
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:464:20
+2026-05-11 19:14:05.374 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:464:20
+[RUN] compile done (0.99s)
+[RUN] generate inputs ...
+[RUN] generate inputs done (3.10s)
+[RUN] runtime ...
+[RUN] runtime done (3.83s)
+[RUN] compute golden ...
+[RUN] compute golden done (21.27s)
+[RUN] validate ...
+[RUN]   'out' PASS  shape=(16, 5120) dtype=torch.bfloat16
+[RUN] validate done (0.02s)
+[RUN] PASS (29.22s)
+[npu-lock] 已释放设备 12 的锁
+=== 任务完成 (exit=0) ===
+==== [scope1_before] (cwd=/data/y00955915/Desktop/pypto-lib-05092/pypto-lib) bash /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/logs/run_scope1_before_ZNbhoY.sh (platform=a2a3) ====
+任务已提交: task_20260511_194221_345827031712 (断开后可用 task-submit --wait task_20260511_194221_345827031712 重连)
+等待任务执行: task_20260511_194221_345827031712 (Ctrl+C 终止任务)
+[npu-lock] 获取设备 12 的锁 (无超时)...
+[npu-lock] 已获取设备 12 的锁 (pid=3458453)
+[RUN] compile ...
+2026-05-11 19:42:26.524 W | No TileType variables found, skipping memory reuse
+2026-05-11 19:42:26.528 W | No TileType variables found, skipping memory reuse
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:402:20
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:402:20
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 128B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:331:34
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 128B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:336:34
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:341:34
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 128B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:364:39
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 128B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:369:39
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:374:39
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:442:42
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:443:42
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:459:42
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:460:42
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:464:20
+2026-05-11 19:42:26.629 I | [perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:464:20
+[RUN] compile done (0.97s)
+[RUN] generate inputs ...
+[RUN] generate inputs done (3.14s)
+[RUN] runtime ...
+[RUN] runtime done (3.95s)
+[RUN] compute golden ...
+[RUN] compute golden done (20.95s)
+[RUN] validate ...
+[RUN]   'out' PASS  shape=(16, 5120) dtype=torch.bfloat16
+[RUN] validate done (0.02s)
+[RUN] PASS (29.03s)
+
+======== PyPTO: newest build_output =========
+DIR=/data/y00955915/Desktop/pypto-lib-05092/pypto-lib/build_output/Qwen3Decode_20260511_194226
+
+--- report/ (memory, perf_hints, compile profile, ...) ---
+
+----- FILE: /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/build_output/Qwen3Decode_20260511_194226/report/memory_after_AllocateMemoryAddr.txt -----
+=== Memory Usage Report ===
+Pass: AllocateMemoryAddr
+Backend: 910B
+Functions: 18 compute functions
+
+--- down_proj ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Mat    |   272.0 KB  |   512.0 KB  |   53.1%  |  4
+  Left   |     4.0 KB  |    64.0 KB  |    6.2%  |  2
+  Right  |    64.0 KB  |    64.0 KB  |  100.0%  |  2
+  Acc    |    16.0 KB  |   128.0 KB  |   12.5%  |  1
+
+--- down_proj_residual ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Vec    |    40.0 KB  |   192.0 KB  |   20.8%  |  3
+
+--- gate_proj ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Mat    |   272.0 KB  |   512.0 KB  |   53.1%  |  4
+  Left   |     4.0 KB  |    64.0 KB  |    6.2%  |  2
+  Right  |    64.0 KB  |    64.0 KB  |  100.0%  |  2
+  Acc    |    16.0 KB  |   128.0 KB  |   12.5%  |  1
+
+--- k_proj ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Mat    |   272.0 KB  |   512.0 KB  |   53.1%  |  4
+  Left   |     4.0 KB  |    64.0 KB  |    6.2%  |  2
+  Right  |    64.0 KB  |    64.0 KB  |  100.0%  |  2
+  Acc    |    16.0 KB  |   128.0 KB  |   12.5%  |  1
+
+--- online_softmax ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Vec    |    34.1 KB  |   192.0 KB  |   17.7%  |  18
+
+--- out_proj_residual_aic ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Mat    |   272.0 KB  |   512.0 KB  |   53.1%  |  4
+  Left   |     4.0 KB  |    64.0 KB  |    6.2%  |  2
+  Right  |    64.0 KB  |    64.0 KB  |  100.0%  |  2
+  Acc    |    16.0 KB  |   128.0 KB  |   12.5%  |  1
+
+--- out_proj_residual_aiv ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Vec    |   148.0 KB  |   192.0 KB  |   77.1%  |  3
+
+--- post_rmsnorm ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Vec    |    66.2 KB  |   192.0 KB  |   34.5%  |  10
+
+--- q_proj ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Mat    |   272.0 KB  |   512.0 KB  |   53.1%  |  4
+  Left   |     4.0 KB  |    64.0 KB  |    6.2%  |  2
+  Right  |    64.0 KB  |    64.0 KB  |  100.0%  |  2
+  Acc    |    16.0 KB  |   128.0 KB  |   12.5%  |  1
+
+--- qk_matmul ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Mat    |    68.0 KB  |   512.0 KB  |   13.3%  |  2
+  Left   |     4.0 KB  |    64.0 KB  |    6.2%  |  2
+  Right  |    64.0 KB  |    64.0 KB  |  100.0%  |  2
+  Acc    |    16.0 KB  |   128.0 KB  |   12.5%  |  1
+
+--- qk_norm ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Vec    |   145.8 KB  |   192.0 KB  |   75.9%  |  12
+
+--- rmsnorm ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Vec    |   100.2 KB  |   192.0 KB  |   52.2%  |  17
+
+--- rope_kv_cache ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Vec    |    17.4 KB  |   192.0 KB  |    9.0%  |  20
+
+--- silu ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Vec    |    72.0 KB  |   192.0 KB  |   37.5%  |  5
+
+--- softmax ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Vec    |    56.1 KB  |   192.0 KB  |   29.2%  |  6
+
+--- sv_matmul ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Mat    |    72.0 KB  |   512.0 KB  |   14.1%  |  2
+  Left   |     8.0 KB  |    64.0 KB  |   12.5%  |  2
+  Right  |    64.0 KB  |    64.0 KB  |  100.0%  |  2
+  Acc    |     8.0 KB  |   128.0 KB  |    6.2%  |  1
+
+--- up_proj ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Mat    |   272.0 KB  |   512.0 KB  |   53.1%  |  4
+  Left   |     4.0 KB  |    64.0 KB  |    6.2%  |  2
+  Right  |    64.0 KB  |    64.0 KB  |  100.0%  |  2
+  Acc    |    16.0 KB  |   128.0 KB  |   12.5%  |  1
+
+--- v_proj ---
+
+  Space  |  Used       |  Limit      |  Usage   |  MemRefs
+  -------+-------------+-------------+----------+---------
+  Mat    |   272.0 KB  |   512.0 KB  |   53.1%  |  4
+  Left   |     4.0 KB  |    64.0 KB  |    6.2%  |  2
+  Right  |    64.0 KB  |    64.0 KB  |  100.0%  |  2
+  Acc    |    16.0 KB  |   128.0 KB  |   12.5%  |  1
+
+----- FILE: /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/build_output/Qwen3Decode_20260511_194226/report/perf_hints.log -----
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:481:20
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:402:20
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:402:20
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:317:16
+[perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 128B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:331:34
+[perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 128B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:336:34
+[perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:341:34
+[perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 128B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:364:39
+[perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 128B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:369:39
+[perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:374:39
+[perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:442:42
+[perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:443:42
+[perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:459:42
+[perf_hint PH001] TileInnermostDimGranularity: tile.store has innermost dim = 4B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:460:42
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:464:20
+[perf_hint PH001] TileInnermostDimGranularity: tile.load has innermost dim = 256B; recommended >= 512B for backend a2a3 (L2 cache line = 512B). Consider increasing tile shape on the innermost axis. at /data/y00955915/Desktop/pypto-lib-05092/pypto-lib/models/qwen3/14b/qwen3_14b_decode.py:464:20
+
+--- passes_dump/*.log (per-pass warning dumps) ---
+(no .log files under passes_dump/)
+
+======== End PyPTO artifact dump =========
+[npu-lock] 已释放设备 12 的锁
+=== 任务完成 (exit=0) ===
+==== [scope1_before] PASS (39s) ====

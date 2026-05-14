@@ -6,17 +6,20 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-"""Qwen3-14B single-layer decode forward (Scope 2 paired-parallel variant).
+"""Qwen3-14B single-layer decode.
 
-Same as ``qwen3_14b_decode.py`` for Scope 1 and Scope 3.
+Scope 1: RMSNorm + Q projection match ``qwen3_14b_decode.py`` (chunk sizes,
+``pl.parallel`` + ``pl.at`` for Q). K and V use **two** separate ``pl.spmd``
+loops over KV output tiles so each body holds only one matmul pipeline (same
+256×256 tiling as ``decode``; a single fused K+V ``spmd`` would exceed the
+a2a3 mat buffer limit).
 
-Scope 2 uses ``for gi in pl.parallel(0, total_q_groups, 2)`` with dual
-per-pair scratch tensors (``all_raw_scores0/1``, …), matching ``qwen3_14b_decode.py``.
-An earlier ``pl.spmd`` + unified-buffer layout nested under
-``pl.parallel(user_batch)`` hit ptoas/MLIR issues (missing SSA for
-``batch_padded`` / malformed ``arith.muli`` on ``all_q_padded`` views).
+Scope 3 follows ``qwen3_14b_decode_scope3_spmd.py``: paired ``pl.parallel`` on
+out-proj and down tiles, inner ``pl.spmd`` on MLP gate/up/SiLU groups.
 
-``total_q_groups`` must be even (holds for Qwen3-14B: 8 groups).
+Scope 2 uses ``pl.parallel(0, total_q_groups, 2)`` + dual buffers (same as
+``qwen3_14b_decode.py``); attention ``pl.spmd`` under ``pl.parallel(user_batch)``
+is not used here.
 """
 
 # pyright: reportUndefinedVariable=false
@@ -46,7 +49,7 @@ KV_HIDDEN = NUM_KV_HEADS * HEAD_DIM
 EPS = 1e-6
 HIDDEN_INV = 1.0 / HIDDEN
 
-# Scope 1 tiling constants.
+# Scope 1 tiling constants (same names/values as ``qwen3_14b_decode.py``).
 INPUT_PROJ_K_CHUNK = 256
 KV_PROJ_K_CHUNK = 256
 Q_OUT_CHUNK = 256
@@ -68,6 +71,8 @@ OUT_PROJ_N_CHUNK = 256
 MLP_OUT_CHUNK = 256
 DOWN_MLP_CHUNK = 256
 DOWN_OUT_CHUNK = 256
+MLP_SPMD_INNER = 2
+MLP_GROUP_CHUNK = MLP_SPMD_INNER * MLP_OUT_CHUNK
 
 
 def build_qwen3_decode_spmd_program(
@@ -95,6 +100,10 @@ def build_qwen3_decode_spmd_program(
     out_proj_n_blocks = hidden // OUT_PROJ_N_CHUNK
     mlp_out_blocks = inter // MLP_OUT_CHUNK
     down_mlp_blocks = inter // DOWN_MLP_CHUNK
+    kv_out_blocks = kv_hidden // KV_OUT_CHUNK
+    assert mlp_out_blocks % MLP_SPMD_INNER == 0
+    assert out_proj_n_blocks % 2 == 0
+    assert down_out_blocks % 2 == 0
     max_blocks_per_seq = (max_seq + BLOCK_SIZE - 1) // BLOCK_SIZE
     half_dim = head_dim // 2
     head_dim_inv = 1.0 / head_dim
@@ -218,30 +227,31 @@ def build_qwen3_decode_spmd_program(
                                 q_acc = pl.matmul_acc(q_acc, tile_a_i, tile_b_i)
                         q_proj = pl.assemble(q_proj, q_acc, [b0, q0])
 
-                for kv0 in pl.parallel(0, kv_hidden, KV_OUT_CHUNK):
-                    with pl.at(level=pl.Level.CORE_GROUP, name_hint="k_proj"):
-                        k_acc = pl.create_tensor([BATCH_TILE, KV_OUT_CHUNK], dtype=pl.FP32)
-                        for kb in pl.pipeline(0, kv_proj_k_blocks, stage=2):
-                            k0 = kb * KV_PROJ_K_CHUNK
-                            k_tile_a_i = normed_tile[:, k0 : k0 + KV_PROJ_K_CHUNK]
-                            k_tile_w_i = wk[k0 : k0 + KV_PROJ_K_CHUNK, kv0 : kv0 + KV_OUT_CHUNK]
-                            if k0 == 0:
-                                k_acc = pl.matmul(k_tile_a_i, k_tile_w_i, out_dtype=pl.FP32)
-                            else:
-                                k_acc = pl.matmul_acc(k_acc, k_tile_a_i, k_tile_w_i)
-                        k_proj = pl.assemble(k_proj, k_acc, [b0, kv0])
+                for kvi in pl.spmd(kv_out_blocks, name_hint="k_proj_spmd"):
+                    kv0 = kvi * KV_OUT_CHUNK
+                    k_acc = pl.create_tensor([BATCH_TILE, KV_OUT_CHUNK], dtype=pl.FP32)
+                    for kb in pl.pipeline(0, kv_proj_k_blocks, stage=2):
+                        k0 = kb * KV_PROJ_K_CHUNK
+                        k_tile_a_i = normed_tile[:, k0 : k0 + KV_PROJ_K_CHUNK]
+                        k_tile_w_i = wk[k0 : k0 + KV_PROJ_K_CHUNK, kv0 : kv0 + KV_OUT_CHUNK]
+                        if k0 == 0:
+                            k_acc = pl.matmul(k_tile_a_i, k_tile_w_i, out_dtype=pl.FP32)
+                        else:
+                            k_acc = pl.matmul_acc(k_acc, k_tile_a_i, k_tile_w_i)
+                    k_proj = pl.assemble(k_proj, k_acc, [b0, kv0])
 
-                    with pl.at(level=pl.Level.CORE_GROUP, name_hint="v_proj"):
-                        v_acc = pl.create_tensor([BATCH_TILE, KV_OUT_CHUNK], dtype=pl.FP32)
-                        for kb in pl.pipeline(0, kv_proj_k_blocks, stage=2):
-                            k0 = kb * KV_PROJ_K_CHUNK
-                            v_tile_a_i = normed_tile[:, k0 : k0 + KV_PROJ_K_CHUNK]
-                            v_tile_w_i = wv[k0 : k0 + KV_PROJ_K_CHUNK, kv0 : kv0 + KV_OUT_CHUNK]
-                            if k0 == 0:
-                                v_acc = pl.matmul(v_tile_a_i, v_tile_w_i, out_dtype=pl.FP32)
-                            else:
-                                v_acc = pl.matmul_acc(v_acc, v_tile_a_i, v_tile_w_i)
-                        v_proj = pl.assemble(v_proj, v_acc, [b0, kv0])
+                for vvi in pl.spmd(kv_out_blocks, name_hint="v_proj_spmd"):
+                    kv0 = vvi * KV_OUT_CHUNK
+                    v_acc = pl.create_tensor([BATCH_TILE, KV_OUT_CHUNK], dtype=pl.FP32)
+                    for kb in pl.pipeline(0, kv_proj_k_blocks, stage=2):
+                        k0 = kb * KV_PROJ_K_CHUNK
+                        v_tile_a_i = normed_tile[:, k0 : k0 + KV_PROJ_K_CHUNK]
+                        v_tile_w_i = wv[k0 : k0 + KV_PROJ_K_CHUNK, kv0 : kv0 + KV_OUT_CHUNK]
+                        if k0 == 0:
+                            v_acc = pl.matmul(v_tile_a_i, v_tile_w_i, out_dtype=pl.FP32)
+                        else:
+                            v_acc = pl.matmul_acc(v_acc, v_tile_a_i, v_tile_w_i)
+                    v_proj = pl.assemble(v_proj, v_acc, [b0, kv0])
 
             # HF-style per-head q_norm / k_norm before RoPE, batched to avoid
             # generating unsupported 1x1 vec-tile scalar ops on A2/A3.
@@ -276,9 +286,9 @@ def build_qwen3_decode_spmd_program(
                         k_proj_norm = pl.assemble(k_proj_norm, k_chunk_norm, [b0, k0])
 
             # Scope 2: RoPE + KV cache update + grouped decode attention.
-            # Same structure as ``qwen3_14b_decode.py`` (paired ``pl.parallel`` on
-            # gi, dual scratch buffers). See module docstring: ``pl.spmd`` here
-            # broke ptoas under ``pl.parallel(user_batch)``.
+            # Uses ``for gi in pl.parallel(0, total_q_groups, 2)`` + dual buffers
+            # (same as ``qwen3_14b_decode.py``). ``pl.spmd`` on attention nested
+            # under ``pl.parallel(user_batch)`` fails ptoas SSA on this stack.
             # attn_out is allocated at batch_padded so scope-3 (which loops
             # over batch_padded) can read full BATCH_TILE rows in every
             # iteration; padded rows are zero-init and stay 0 (scope-2 only
@@ -518,49 +528,34 @@ def build_qwen3_decode_spmd_program(
 
                 attn_out = pl.assemble(attn_out, attn_row, [b, 0])
 
-            # Scope 3: output projection + residual + post RMSNorm + MLP + residual.
-            # Loops over batch_padded so every iteration processes a full
-            # [BATCH_TILE, *] tile (a2a3 matmul M-tile constraint).
-            # `cur_valid` clamps the user-visible row count for input load
-            # (hidden_states valid_shape) and final out store (vec-to-vec
-            # textract trim). When user_batch is BATCH_TILE-aligned,
-            # cur_valid == BATCH_TILE every iter and trim is a no-op.
-            #
-            # Final down-proj + residual + cast uses the two-incore pattern
-            # validated in dynamic_batch_pad_repro:
-            #   cube incore : matmul_acc -> FP32 -> assemble to GM scratch
-            #   vec incore  : tload FP32 chunk -> add FP32 resid -> cast BF16
-            #                 (preserves ND layout) -> slice(valid_shape)
-            #                 -> assemble to out
-            # ND -> ND vec-to-vec textract is supported on ptoas 0.31.
+            # Scope 3: layout from ``qwen3_14b_decode_scope3_spmd.py`` (paired
+            # parallel on out/down, ``pl.spmd`` on MLP); out uses valid_shape trim.
             for b0 in pl.parallel(0, batch_padded, BATCH_TILE):
                 cur_valid = pl.min(BATCH_TILE, user_batch - b0)
                 resid1_tile = pl.create_tensor([BATCH_TILE, hidden], dtype=pl.FP32)
 
-                with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.auto_chunk, pl.split(pl.SplitMode.UP_DOWN)], name_hint="out_proj_residual"):
-                    for ob in pl.parallel(0, out_proj_n_blocks, chunk=1):
-                        o0 = ob * OUT_PROJ_N_CHUNK
-
-                        hidden_chunk = pl.slice(
-                            hidden_states,
-                            [BATCH_TILE, OUT_PROJ_N_CHUNK],
-                            [b0, o0],
-                            valid_shape=[cur_valid, OUT_PROJ_N_CHUNK],
-                        )
-
-                        o_acc = pl.create_tensor([BATCH_TILE, OUT_PROJ_N_CHUNK], dtype=pl.FP32)
-                        for kb in pl.pipeline(0, out_proj_k_blocks, stage=2):
-                            k0 = kb * OUT_PROJ_K_CHUNK
-                            a_chunk = attn_out[b0 : b0 + BATCH_TILE, k0 : k0 + OUT_PROJ_K_CHUNK]
-                            w_chunk = wo[k0 : k0 + OUT_PROJ_K_CHUNK, o0 : o0 + OUT_PROJ_N_CHUNK]
-                            if k0 == 0:
-                                o_acc = pl.matmul(a_chunk, w_chunk, out_dtype=pl.FP32)
-                            else:
-                                o_acc = pl.matmul_acc(o_acc, a_chunk, w_chunk)
-
-                        resid = pl.cast(hidden_chunk, target_type=pl.FP32)
-                        resid_sum = pl.add(o_acc, resid)
-                        resid1_tile = pl.assemble(resid1_tile, resid_sum, [0, o0])
+                for ob_pair in pl.parallel(0, out_proj_n_blocks, 2):
+                    with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.auto_chunk, pl.split(pl.SplitMode.UP_DOWN)], name_hint="out_proj_residual"):
+                        for oi in pl.range(ob_pair, ob_pair + 2):
+                            o0 = oi * OUT_PROJ_N_CHUNK
+                            hidden_chunk = pl.slice(
+                                hidden_states,
+                                [BATCH_TILE, OUT_PROJ_N_CHUNK],
+                                [b0, o0],
+                                valid_shape=[cur_valid, OUT_PROJ_N_CHUNK],
+                            )
+                            o_acc = pl.create_tensor([BATCH_TILE, OUT_PROJ_N_CHUNK], dtype=pl.FP32)
+                            for kb in pl.pipeline(0, out_proj_k_blocks, stage=2):
+                                k0 = kb * OUT_PROJ_K_CHUNK
+                                a_chunk = attn_out[b0 : b0 + BATCH_TILE, k0 : k0 + OUT_PROJ_K_CHUNK]
+                                w_chunk = wo[k0 : k0 + OUT_PROJ_K_CHUNK, o0 : o0 + OUT_PROJ_N_CHUNK]
+                                if k0 == 0:
+                                    o_acc = pl.matmul(a_chunk, w_chunk, out_dtype=pl.FP32)
+                                else:
+                                    o_acc = pl.matmul_acc(o_acc, a_chunk, w_chunk)
+                            resid = pl.cast(hidden_chunk, target_type=pl.FP32)
+                            resid_sum = pl.add(o_acc, resid)
+                            resid1_tile = pl.assemble(resid1_tile, resid_sum, [0, o0])
 
                 post_norm_tile = pl.create_tensor([BATCH_TILE, hidden], dtype=pl.BF16)
                 with pl.at(level=pl.Level.CORE_GROUP, name_hint="post_rmsnorm"):
@@ -573,77 +568,94 @@ def build_qwen3_decode_spmd_program(
                             pl.reshape(pl.row_sum(pl.mul(resid_chunk, resid_chunk)), [1, BATCH_TILE]),
                         )
                     inv_rms_s3 = pl.recip(pl.sqrt(pl.add(pl.mul(sq_sum, HIDDEN_INV), EPS)))
-
+                    inv_rms_s3_col = pl.reshape(inv_rms_s3, [BATCH_TILE, 1])
                     for kb in pl.pipeline(hidden_blocks, stage=2):
                         k0 = kb * K_CHUNK
                         resid_chunk = resid1_tile[:, k0 : k0 + K_CHUNK]
                         post_gamma = post_rms_weight[:, k0 : k0 + K_CHUNK]
                         post_normed = pl.col_expand_mul(
-                            pl.row_expand_mul(resid_chunk, pl.reshape(inv_rms_s3, [BATCH_TILE, 1])),
+                            pl.row_expand_mul(resid_chunk, inv_rms_s3_col),
                             post_gamma,
                         )
                         normed_bf16 = pl.cast(post_normed, target_type=pl.BF16)
                         post_norm_tile = pl.assemble(post_norm_tile, normed_bf16, [0, k0])
 
                 mlp_tile = pl.create_tensor([BATCH_TILE, inter], dtype=pl.BF16)
-                for ob in pl.range(mlp_out_blocks):
-                    o0 = ob * MLP_OUT_CHUNK
-                    with pl.at(level=pl.Level.CORE_GROUP, name_hint="gate_proj"):
-                        gate_acc = pl.create_tensor([BATCH_TILE, MLP_OUT_CHUNK], dtype=pl.FP32)
-                        for kb in pl.pipeline(0, hidden_blocks, stage=2):
-                            k0 = kb * K_CHUNK
-                            post_chunk = post_norm_tile[:, k0 : k0 + K_CHUNK]
-                            wg = w_gate[k0 : k0 + K_CHUNK, o0 : o0 + MLP_OUT_CHUNK]
-                            if k0 == 0:
-                                gate_acc = pl.matmul(post_chunk, wg, out_dtype=pl.FP32)
-                            else:
-                                gate_acc = pl.matmul_acc(gate_acc, post_chunk, wg)
+                for ob_base in pl.parallel(0, mlp_out_blocks, MLP_SPMD_INNER):
+                    gate_group = pl.create_tensor([BATCH_TILE, MLP_GROUP_CHUNK], dtype=pl.FP32)
+                    up_group = pl.create_tensor([BATCH_TILE, MLP_GROUP_CHUNK], dtype=pl.FP32)
 
-                    with pl.at(level=pl.Level.CORE_GROUP, name_hint="up_proj"):
-                        up_acc = pl.create_tensor([BATCH_TILE, MLP_OUT_CHUNK], dtype=pl.FP32)
-                        for kb in pl.pipeline(0, hidden_blocks, stage=2):
+                    for ob in pl.spmd(MLP_SPMD_INNER, name_hint="gate_proj_spmd"):
+                        o0 = (ob_base + ob) * MLP_OUT_CHUNK
+                        g0 = ob * MLP_OUT_CHUNK
+                        post_chunk_0 = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, 0])
+                        post_chunk_1 = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, K_CHUNK])
+                        wg_0 = pl.slice(w_gate, [K_CHUNK, MLP_OUT_CHUNK], [0, o0])
+                        gate_acc = pl.matmul(post_chunk_0, wg_0, out_dtype=pl.FP32)
+                        wg_1 = pl.slice(w_gate, [K_CHUNK, MLP_OUT_CHUNK], [K_CHUNK, o0])
+                        gate_acc = pl.matmul_acc(gate_acc, post_chunk_1, wg_1)
+                        for kb in pl.pipeline(2, hidden_blocks, stage=2):
                             k0 = kb * K_CHUNK
-                            post_chunk = post_norm_tile[:, k0 : k0 + K_CHUNK]
-                            wu = w_up[k0 : k0 + K_CHUNK, o0 : o0 + MLP_OUT_CHUNK]
-                            if k0 == 0:
-                                up_acc = pl.matmul(post_chunk, wu, out_dtype=pl.FP32)
-                            else:
-                                up_acc = pl.matmul_acc(up_acc, post_chunk, wu)
+                            post_chunk = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, k0])
+                            wg = pl.slice(w_gate, [K_CHUNK, MLP_OUT_CHUNK], [k0, o0])
+                            gate_acc = pl.matmul_acc(gate_acc, post_chunk, wg)
+                        gate_group = pl.assemble(gate_group, gate_acc, [0, g0])
 
-                    with pl.at(level=pl.Level.CORE_GROUP, optimization=pl.chunked_loop_optimizer, name_hint="silu"):
+                    for ob in pl.spmd(MLP_SPMD_INNER, name_hint="up_proj_spmd"):
+                        o0 = (ob_base + ob) * MLP_OUT_CHUNK
+                        g0 = ob * MLP_OUT_CHUNK
+                        post_chunk_0 = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, 0])
+                        post_chunk_1 = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, K_CHUNK])
+                        wu_0 = pl.slice(w_up, [K_CHUNK, MLP_OUT_CHUNK], [0, o0])
+                        up_acc = pl.matmul(post_chunk_0, wu_0, out_dtype=pl.FP32)
+                        wu_1 = pl.slice(w_up, [K_CHUNK, MLP_OUT_CHUNK], [K_CHUNK, o0])
+                        up_acc = pl.matmul_acc(up_acc, post_chunk_1, wu_1)
+                        for kb in pl.pipeline(2, hidden_blocks, stage=2):
+                            k0 = kb * K_CHUNK
+                            post_chunk = pl.slice(post_norm_tile, [BATCH_TILE, K_CHUNK], [0, k0])
+                            wu = pl.slice(w_up, [K_CHUNK, MLP_OUT_CHUNK], [k0, o0])
+                            up_acc = pl.matmul_acc(up_acc, post_chunk, wu)
+                        up_group = pl.assemble(up_group, up_acc, [0, g0])
+
+                    for ob in pl.spmd(MLP_SPMD_INNER, name_hint="silu_spmd"):
+                        o0 = (ob_base + ob) * MLP_OUT_CHUNK
+                        g0 = ob * MLP_OUT_CHUNK
+                        gate_acc = pl.slice(gate_group, [BATCH_TILE, MLP_OUT_CHUNK], [0, g0])
+                        up_acc = pl.slice(up_group, [BATCH_TILE, MLP_OUT_CHUNK], [0, g0])
                         sigmoid = pl.recip(pl.add(pl.exp(pl.neg(gate_acc)), 1.0))
                         mlp_chunk = pl.mul(pl.mul(gate_acc, sigmoid), up_acc)
                         mlp_chunk_bf16 = pl.cast(mlp_chunk, target_type=pl.BF16)
                         mlp_tile = pl.assemble(mlp_tile, mlp_chunk_bf16, [0, o0])
 
-                for dob in pl.range(down_out_blocks):
-                    d0 = dob * DOWN_OUT_CHUNK
-                    fp32_chunk_gm = pl.create_tensor([BATCH_TILE, DOWN_OUT_CHUNK], dtype=pl.FP32)
+                for db in pl.parallel(0, down_out_blocks, 2):
+                    for di in pl.range(db, db + 2):
+                        d0 = di * DOWN_OUT_CHUNK
+                        fp32_chunk_gm = pl.create_tensor([BATCH_TILE, DOWN_OUT_CHUNK], dtype=pl.FP32)
 
-                    with pl.at(level=pl.Level.CORE_GROUP, name_hint="down_proj"):
-                        down_acc = pl.create_tensor([BATCH_TILE, DOWN_OUT_CHUNK], dtype=pl.FP32)
-                        for ob in pl.pipeline(0, down_mlp_blocks, stage=2):
-                            o0 = ob * DOWN_MLP_CHUNK
-                            down_mlp_chunk_bf16 = mlp_tile[:, o0 : o0 + DOWN_MLP_CHUNK]
-                            w_down_chunk = w_down[o0 : o0 + DOWN_MLP_CHUNK, d0 : d0 + DOWN_OUT_CHUNK]
-                            if o0 == 0:
-                                down_acc = pl.matmul(down_mlp_chunk_bf16, w_down_chunk, out_dtype=pl.FP32)
-                            else:
-                                down_acc = pl.matmul_acc(down_acc, down_mlp_chunk_bf16, w_down_chunk)
-                        fp32_chunk_gm = pl.assemble(fp32_chunk_gm, down_acc, [0, 0])
+                        with pl.at(level=pl.Level.CORE_GROUP, name_hint="down_proj"):
+                            down_acc = pl.create_tensor([BATCH_TILE, DOWN_OUT_CHUNK], dtype=pl.FP32)
+                            for ob in pl.pipeline(0, down_mlp_blocks, stage=2):
+                                o0 = ob * DOWN_MLP_CHUNK
+                                down_mlp_chunk_bf16 = mlp_tile[:, o0 : o0 + DOWN_MLP_CHUNK]
+                                w_down_chunk = w_down[o0 : o0 + DOWN_MLP_CHUNK, d0 : d0 + DOWN_OUT_CHUNK]
+                                if o0 == 0:
+                                    down_acc = pl.matmul(down_mlp_chunk_bf16, w_down_chunk, out_dtype=pl.FP32)
+                                else:
+                                    down_acc = pl.matmul_acc(down_acc, down_mlp_chunk_bf16, w_down_chunk)
+                            fp32_chunk_gm = pl.assemble(fp32_chunk_gm, down_acc, [0, 0])
 
-                    with pl.at(level=pl.Level.CORE_GROUP, name_hint="down_proj_residual"):
-                        down_chunk_fp32 = fp32_chunk_gm[:, 0:DOWN_OUT_CHUNK]
-                        resid_chunk_fp32 = resid1_tile[:, d0 : d0 + DOWN_OUT_CHUNK]
-                        out_chunk = pl.add(down_chunk_fp32, resid_chunk_fp32)
-                        out_chunk_cast = pl.cast(out_chunk, target_type=pl.BF16)
-                        out_chunk_trimmed = pl.slice(
-                            out_chunk_cast,
-                            [BATCH_TILE, DOWN_OUT_CHUNK],
-                            [0, 0],
-                            valid_shape=[cur_valid, DOWN_OUT_CHUNK],
-                        )
-                        out = pl.assemble(out, out_chunk_trimmed, [b0, d0])
+                        with pl.at(level=pl.Level.CORE_GROUP, name_hint="down_proj_residual"):
+                            down_chunk_fp32 = fp32_chunk_gm[:, 0:DOWN_OUT_CHUNK]
+                            resid_chunk_fp32 = resid1_tile[:, d0 : d0 + DOWN_OUT_CHUNK]
+                            out_chunk = pl.add(down_chunk_fp32, resid_chunk_fp32)
+                            out_chunk_cast = pl.cast(out_chunk, target_type=pl.BF16)
+                            out_chunk_trimmed = pl.slice(
+                                out_chunk_cast,
+                                [BATCH_TILE, DOWN_OUT_CHUNK],
+                                [0, 0],
+                                valid_shape=[cur_valid, DOWN_OUT_CHUNK],
+                            )
+                            out = pl.assemble(out, out_chunk_trimmed, [b0, d0])
 
             return out
 

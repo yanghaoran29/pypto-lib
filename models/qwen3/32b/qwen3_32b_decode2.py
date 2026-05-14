@@ -427,29 +427,22 @@ def build_qwen3_decode_program():
                     mlp_tile = pl.assemble(mlp_tile, mlp_chunk_bf16, [0, o0])
 
             # Stage 7 & 8: Down projection + final residual writeback.
-            # SPMD over hidden column pairs; ``optimizations=[pl.auto_chunk, pl.split(...)]``
-            # lowers the outlined body to AutoInCore + UP_DOWN split (matches
-            # ``ptoas/down_proj_residual.*`` / ``kernels/aiv/down_proj_residual.cpp`` in build_output).
-            for pair_i in pl.spmd(
-                DOWN_PROJ_BLOCKS // 2,
-                optimizations=[pl.auto_chunk, pl.split(pl.SplitMode.UP_DOWN)],
-                name_hint="down_proj_residual",
-            ):
-                # db = pair_i * 2
-                for di in pl.range(pair_i * 2, pair_i * 2 + 2):
-                    d0 = di * DOWN_N_CHUNK
-                    resid1_tile_chunk = resid1_tile[:, d0 : d0 + DOWN_N_CHUNK]
-                    down_acc = pl.create_tensor([BATCH, DOWN_N_CHUNK], dtype=pl.FP32)
-                    for ob in pl.pipeline(0, INTERMEDIATE // DOWN_K_CHUNK, stage=2):
-                        o0 = ob * DOWN_K_CHUNK
-                        down_mlp_chunk = mlp_tile[:, o0 : o0 + DOWN_K_CHUNK]
-                        w_down_chunk = w_down[o0 : o0 + DOWN_K_CHUNK, d0 : d0 + DOWN_N_CHUNK]
-                        if o0 == 0:
-                            down_acc = pl.matmul(down_mlp_chunk, w_down_chunk, out_dtype=pl.FP32)
-                        else:
-                            down_acc = pl.matmul_acc(down_acc, down_mlp_chunk, w_down_chunk)
-                    out_chunk = pl.add(down_acc, resid1_tile_chunk)
-                    out = pl.assemble(out, pl.cast(out_chunk, target_type=pl.BF16), [0, d0])
+            for db in pl.parallel(0, HIDDEN // DOWN_N_CHUNK, 2):
+                with pl.at(level=pl.Level.CORE_GROUP, optimizations=[pl.auto_chunk, pl.split(pl.SplitMode.UP_DOWN)], name_hint="down_proj_residual"):
+                    for di in pl.range(db, db + 2):
+                        d0 = di * DOWN_N_CHUNK
+                        resid1_tile_chunk = resid1_tile[:, d0 : d0 + DOWN_N_CHUNK]
+                        down_acc = pl.create_tensor([BATCH, DOWN_N_CHUNK], dtype=pl.FP32)
+                        for ob in pl.pipeline(0, INTERMEDIATE // DOWN_K_CHUNK, stage=2):
+                            o0 = ob * DOWN_K_CHUNK
+                            down_mlp_chunk = mlp_tile[:, o0 : o0 + DOWN_K_CHUNK]
+                            w_down_chunk = w_down[o0 : o0 + DOWN_K_CHUNK, d0 : d0 + DOWN_N_CHUNK]
+                            if o0 == 0:
+                                down_acc = pl.matmul(down_mlp_chunk, w_down_chunk, out_dtype=pl.FP32)
+                            else:
+                                down_acc = pl.matmul_acc(down_acc, down_mlp_chunk, w_down_chunk)
+                        out_chunk = pl.add(down_acc, resid1_tile_chunk)
+                        out = pl.assemble(out, pl.cast(out_chunk, target_type=pl.BF16), [0, d0])
 
             return out
 
@@ -658,7 +651,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--platform", type=str, default="a2a3", choices=["a2a3", "a2a3sim", "a5", "a5sim"])
     parser.add_argument("-d", "--device", type=int, default=0)
-    parser.add_argument("--enable-l2-swimlane", action="store_true", default=False)
+    parser.add_argument("--runtime-profiling", action="store_true", default=False)
     parser.add_argument("--max-seq", action="store_true", default=False)
     args = parser.parse_args()
 
@@ -673,7 +666,7 @@ if __name__ == "__main__":
             runtime=dict(
                 platform=args.platform,
                 device_id=args.device,
-                enable_l2_swimlane=args.enable_l2_swimlane,
+                runtime_profiling=args.runtime_profiling,
             ),
         ),
     )
