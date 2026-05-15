@@ -1,0 +1,996 @@
+[RUN] compile ...
+2026-05-19 19:12:20.825 I | No TileType variables found in function 'down_proj_residual_spmd', skipping memory reuse
+2026-05-19 19:12:20.825 I | No TileType variables found in function 'down_proj_spmd', skipping memory reuse
+2026-05-19 19:12:20.825 I | No TileType variables found in function 'gate_proj_spmd', skipping memory reuse
+2026-05-19 19:12:20.825 I | No TileType variables found in function 'k_proj_spmd', skipping memory reuse
+2026-05-19 19:12:20.825 I | No TileType variables found in function 'online_softmax', skipping memory reuse
+2026-05-19 19:12:20.825 I | No TileType variables found in function 'out_proj_residual', skipping memory reuse
+2026-05-19 19:12:20.825 I | No TileType variables found in function 'out_proj_residual__windowed', skipping memory reuse
+2026-05-19 19:12:20.828 I | No TileType variables found in function 'q_proj_spmd', skipping memory reuse
+2026-05-19 19:12:20.828 I | No TileType variables found in function 'qk_matmul', skipping memory reuse
+2026-05-19 19:12:20.842 I | No TileType variables found in function 'silu_spmd', skipping memory reuse
+2026-05-19 19:12:20.842 I | No TileType variables found in function 'softmax', skipping memory reuse
+2026-05-19 19:12:20.842 I | No TileType variables found in function 'sv_matmul', skipping memory reuse
+2026-05-19 19:12:20.842 I | No TileType variables found in function 'up_proj_spmd', skipping memory reuse
+2026-05-19 19:12:20.842 I | No TileType variables found in function 'v_proj_spmd', skipping memory reuse
+2026-05-19 19:12:21.219 I | [perf_hint] 28 hints across 14 sites; see build_output/Qwen3DecodeSpmd_20260519_191220/report/perf_hints.log
+[RUN] compile done (1.94s)
+[RUN] generate inputs ...
+[RUN] generate inputs done (7.04s)
+[RUN] runtime ...
+[Incore] Compilation failed: In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:24:
+/data/y00955915/pto-isa/include/pto/common/pto_tile.hpp:1514:55: warning: '&&' within '||' [-Wlogical-op-parentheses]
+                      (SFractal_ != SLayout::NoneBox) &&
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+/data/y00955915/pto-isa/include/pto/common/pto_tile.hpp:1514:55: note: place parentheses around the '&&' expression to silence this warning
+                      (SFractal_ != SLayout::NoneBox) &&
+                                                      ^
+                      (
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:64:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TAdd.hpp:66:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TAdd.hpp:65:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:65:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TAnd.hpp:78:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TAnd.hpp:79:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:66:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TOr.hpp:71:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TOr.hpp:70:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:67:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TXor.hpp:35:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TXor.hpp:34:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:68:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TShl.hpp:49:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TShl.hpp:48:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:69:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TShr.hpp:48:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TShr.hpp:49:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:74:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRem.hpp:103:18: warning: unused variable 'colsRemaining' [-Wunused-variable]
+        unsigned colsRemaining = validCols;
+                 ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRem.hpp:129:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRem.hpp:130:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:76:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFmod.hpp:52:18: warning: unused variable 'colsFmodaining' [-Wunused-variable]
+        unsigned colsFmodaining = validCols;
+                 ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFmod.hpp:73:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFmod.hpp:74:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:80:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TSub.hpp:65:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TSub.hpp:64:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:81:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TSels.hpp:26:24: warning: unused variable 'maskRowStride' [-Wunused-variable]
+    constexpr unsigned maskRowStride = MaskTile::RowStride;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TSels.hpp:27:24: warning: unused variable 'cmpmaskLen' [-Wunused-variable]
+    constexpr unsigned cmpmaskLen = sizeof(T) == 2 ? 4 : 2; // 128bit for B16 and 64bit for B32
+                       ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:82:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMin.hpp:66:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMin.hpp:65:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:86:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMax.hpp:64:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMax.hpp:65:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:92:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowSum.hpp:98:28: warning: unused variable 'tmpRowStride' [-Wunused-variable]
+        constexpr unsigned tmpRowStride = TileDataTmp::RowStride;
+                           ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:94:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowMax.hpp:68:28: warning: unused variable 'tmpRowStride' [-Wunused-variable]
+        constexpr unsigned tmpRowStride = TileDataTmp::RowStride;
+                           ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:95:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowMin.hpp:68:28: warning: unused variable 'tmpRowStride' [-Wunused-variable]
+        constexpr unsigned tmpRowStride = TileDataTmp::RowStride;
+                           ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:96:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowReduceIdxOps.hpp:72:24: warning: unused variable 'srcRptStride' [-Wunused-variable]
+    constexpr uint32_t srcRptStride = TileDataIn::Cols / elemPerBlock;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowReduceIdxOps.hpp:128:24: warning: unused variable 'srcRptStride' [-Wunused-variable]
+    constexpr uint32_t srcRptStride = TileDataIn::Cols / elemPerBlock;
+                       ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:97:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:272:24: warning: unused variable 'blockSizeElem' [-Wunused-variable]
+    constexpr unsigned blockSizeElem = BLOCK_BYTE_SIZE / sizeof(typename TileDataSrc::DType);
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:273:24: warning: unused variable 'dstStride' [-Wunused-variable]
+    constexpr unsigned dstStride = TileDataDst::RowStride;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:274:24: warning: unused variable 'srcStride' [-Wunused-variable]
+    constexpr unsigned srcStride = TileDataSrc::RowStride;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:299:24: warning: unused variable 'blockSizeElem' [-Wunused-variable]
+    constexpr unsigned blockSizeElem = BLOCK_BYTE_SIZE / sizeof(typename TileDataSrc::DType);
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:300:24: warning: unused variable 'dstStride' [-Wunused-variable]
+    constexpr unsigned dstStride = TileDataDst::RowStride;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:301:24: warning: unused variable 'srcStride' [-Wunused-variable]
+    constexpr unsigned srcStride = TileDataSrc::RowStride;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:371:24: warning: unused variable 'blockSizeElem' [-Wunused-variable]
+    constexpr unsigned blockSizeElem = BLOCK_BYTE_SIZE / sizeof(typename TileDataSrc::DType);
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:372:24: warning: unused variable 'dstStride' [-Wunused-variable]
+    constexpr unsigned dstStride = TileDataDst::RowStride;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:373:24: warning: unused variable 'srcStride' [-Wunused-variable]
+    constexpr unsigned srcStride = TileDataSrc::RowStride;
+                       ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:99:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMatmul.hpp:64:33: warning: '&' within '|' [-Wbitwise-op-parentheses]
+    uint64_t xd = ((uint64_t)c) & 0xffffffffULL | ((((uint64_t)d) & 0xffffffffULL) << 32);
+                  ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~ ~
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMatmul.hpp:64:33: note: place parentheses around the '&' expression to silence this warning
+    uint64_t xd = ((uint64_t)c) & 0xffffffffULL | ((((uint64_t)d) & 0xffffffffULL) << 32);
+                                ^
+                  (                            )
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:100:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMrgSort.hpp:279:14: warning: unused variable 'dstCol' [-Wunused-variable]
+    uint32_t dstCol = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:102:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TExtract.hpp:135:24: warning: unused variable 'srcRowNum' [-Wunused-variable]
+    constexpr uint16_t srcRowNum = (srcRow * sizeof(SrcType)) >> SHIFT_BLOCK_BYTE;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TExtract.hpp:160:28: warning: unused variable 'srcColNum' [-Wunused-variable]
+        constexpr uint16_t srcColNum = srcCol * sizeof(SrcType) >> SHIFT_BLOCK_BYTE;
+                           ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TExtract.hpp:321:24: warning: unused variable 'srcRowNum' [-Wunused-variable]
+    constexpr uint16_t srcRowNum = (srcRow * sizeof(SrcType)) >> SHIFT_BLOCK_BYTE;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TExtract.hpp:346:28: warning: unused variable 'srcColNum' [-Wunused-variable]
+        constexpr uint16_t srcColNum = srcCol * sizeof(SrcType) >> SHIFT_BLOCK_BYTE;
+                           ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TExtract.hpp:417:14: warning: unused variable 'blockNum' [-Wunused-variable]
+    uint16_t blockNum = CUBE_BLOCK_SIZE / sizeof(SrcType);
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TExtract.hpp:443:24: warning: unused variable 'c0ElemCount' [-Wunused-variable]
+    constexpr uint32_t c0ElemCount = C0_SIZE_BYTE / sizeof(typename SrcTileData::DType);
+                       ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:103:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMov.hpp:57:25: warning: unused variable 'RELU_BIT' [-Wunused-variable]
+    constexpr const int RELU_BIT = 16;
+                        ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:104:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMul.hpp:64:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMul.hpp:65:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:107:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TGather.hpp:39:14: warning: unused variable 'TShape0' [-Wunused-variable]
+    unsigned TShape0 = TileDataD::Rows;
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TGather.hpp:42:24: warning: unused variable 'blockSizeElem' [-Wunused-variable]
+    constexpr unsigned blockSizeElem = BLOCK_BYTE_SIZE / sizeof(typename TileDataD::DType);
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TGather.hpp:44:24: warning: unused variable 'stride' [-Wunused-variable]
+    constexpr unsigned stride = TileDataD::RowStride;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TGather.hpp:46:14: warning: unused variable 'numRemainPerLine' [-Wunused-variable]
+    unsigned numRemainPerLine = validCol % elementsPerRepeat;
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TGather.hpp:47:14: warning: unused variable 'numLoop' [-Wunused-variable]
+    unsigned numLoop = numRepeatPerLine / REPEAT_MAX;
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TGather.hpp:48:14: warning: unused variable 'remainAfterLoop' [-Wunused-variable]
+    unsigned remainAfterLoop = numRepeatPerLine % REPEAT_MAX;
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:109:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TDiv.hpp:60:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TDiv.hpp:61:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:114:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TPartArgOp.hpp:49:24: warning: unused variable 'blockSizeElem' [-Wunused-variable]
+    constexpr unsigned blockSizeElem = BLOCK_BYTE_SIZE / sizeof(TVal);
+                       ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:124:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpand.hpp:90:9: warning: unused variable 'srcValidRow' [-Wunused-variable]
+    int srcValidRow = src.GetValidRow();
+        ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpand.hpp:91:9: warning: unused variable 'srcValidCol' [-Wunused-variable]
+    int srcValidCol = src.GetValidCol();
+        ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:125:
+In file included from /data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpandAdd.hpp:16:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpandBinOp.hpp:160:14: warning: unused variable 'repeatTimes' [-Wunused-variable]
+    unsigned repeatTimes = CeilDivision(validRow, 8);
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:125:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpandAdd.hpp:91:10: warning: unused variable 'src1eqdst' [-Wunused-variable]
+    bool src1eqdst = (validRow == src1ValidRow) && (validCol == src1ValidCol);
+         ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:126:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpandDiv.hpp:104:10: warning: unused variable 'src1eqdst' [-Wunused-variable]
+    bool src1eqdst = (validRow == src1ValidRow) && (validCol == src1ValidCol);
+         ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:127:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpandMax.hpp:91:10: warning: unused variable 'src1eqdst' [-Wunused-variable]
+    bool src1eqdst = (validRow == src1ValidRow) && (validCol == src1ValidCol);
+         ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:128:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpandMin.hpp:91:10: warning: unused variable 'src1eqdst' [-Wunused-variable]
+    bool src1eqdst = (validRow == src1ValidRow) && (validCol == src1ValidCol);
+         ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:129:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpandMul.hpp:91:10: warning: unused variable 'src1eqdst' [-Wunused-variable]
+    bool src1eqdst = (validRow == src1ValidRow) && (validCol == src1ValidCol);
+         ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:130:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpandSub.hpp:104:10: warning: unused variable 'src1eqdst' [-Wunused-variable]
+    bool src1eqdst = (validRow == src1ValidRow) && (validCol == src1ValidCol);
+         ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:136:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TBitwiseSOp.hpp:29:14: warning: unused variable 'dstValidRow' [-Wunused-variable]
+    unsigned dstValidRow = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TBitwiseSOp.hpp:30:14: warning: unused variable 'dstValidCol' [-Wunused-variable]
+    unsigned dstValidCol = dst.GetValidCol();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TBitwiseSOp.hpp:31:14: warning: unused variable 'srcValidRow' [-Wunused-variable]
+    unsigned srcValidRow = src.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TBitwiseSOp.hpp:32:14: warning: unused variable 'srcValidCol' [-Wunused-variable]
+    unsigned srcValidCol = src.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:144:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TPrelu.hpp:32:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TPrelu.hpp:33:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:147:
+In file included from /data/y00955915/pto-isa/include/pto/npu/a2a3/TColExpandAdd.hpp:16:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TColExpandBinOp.hpp:100:10: warning: unused variable 'src1eqdst' [-Wunused-variable]
+    bool src1eqdst = (validRow == src1ValidRow) && (validCol == src1ValidCol);
+         ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:155:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TDequant.hpp:127:14: warning: unused variable 'dstValidRows' [-Wunused-variable]
+    unsigned dstValidRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TDequant.hpp:128:14: warning: unused variable 'dstValidCols' [-Wunused-variable]
+    unsigned dstValidCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:156:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TPush.hpp:184:27: warning: unused variable 'ConsM' [-Wunused-variable]
+            constexpr int ConsM = (Split == TileSplitAxis::TILE_UP_DOWN) ? ProdM * splitNum : ProdM;
+                          ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TPush.hpp:351:27: warning: unused variable 'ProdM' [-Wunused-variable]
+            constexpr int ProdM = (Split == TileSplitAxis::TILE_UP_DOWN) ? ConsM * splitNum : ConsM;
+                          ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TPush.hpp:801:27: warning: unused variable 'VEC_CORES' [-Wunused-variable]
+            constexpr int VEC_CORES = (VCRatio == VecCubeRatio::V2C1_VECS) ? 2 : 1;
+                          ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:20:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_inst.hpp:16:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_instr_impl.hpp:23:
+In file included from /data/y00955915/pto-isa/include/pto/comm/a2a3/async/TPutAsync.hpp:14:
+/data/y00955915/pto-isa/include/pto/comm/async_common/TPutAsyncCommonDetail.hpp:83:20: warning: unused variable 'dstElems' [-Wunused-variable]
+    const uint32_t dstElems = TPutAsyncGetTotalElemCount(dstGlobalData);
+                   ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:20:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_inst.hpp:16:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_instr_impl.hpp:24:
+In file included from /data/y00955915/pto-isa/include/pto/comm/a2a3/async/TGetAsync.hpp:14:
+/data/y00955915/pto-isa/include/pto/comm/async_common/TGetAsyncCommonDetail.hpp:84:20: warning: unused variable 'dstElems' [-Wunused-variable]
+    const uint32_t dstElems = TGetAsyncGetTotalElemCount(dstGlobalData);
+                   ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:20:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_inst.hpp:16:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_instr_impl.hpp:27:
+/data/y00955915/pto-isa/include/pto/comm/a2a3/TWait.hpp:74:24: warning: unused variable 'kMaxSpinCount' [-Wunused-variable]
+    constexpr uint32_t kMaxSpinCount = 100000000; // Deadlock detection threshold
+                       ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:20:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_inst.hpp:16:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_instr_impl.hpp:30:
+/data/y00955915/pto-isa/include/pto/comm/a2a3/TGather.hpp:171:15: warning: unused variable 'rootIdx' [-Wunused-variable]
+    const int rootIdx = parallelGroup.GetRootIdx();
+              ^
+/data/y00955915/pto-isa/include/pto/comm/a2a3/TGather.hpp:401:15: warning: unused variable 'rootIdx' [-Wunused-variable]
+    const int rootIdx = parallelGroup.GetRootIdx();
+              ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:20:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_inst.hpp:16:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_instr_impl.hpp:31:
+/data/y00955915/pto-isa/include/pto/comm/a2a3/TScatter.hpp:167:15: warning: unused variable 'rootIdx' [-Wunused-variable]
+    const int rootIdx = parallelGroup.GetRootIdx();
+              ^
+/data/y00955915/pto-isa/include/pto/comm/a2a3/TScatter.hpp:378:15: warning: unused variable 'rootIdx' [-Wunused-variable]
+    const int rootIdx = parallelGroup.GetRootIdx();
+              ^
+/data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:65:11: warning: unused variable 'v27' [-Wunused-variable]
+  int32_t v27 = (int32_t) ((uint32_t) v8 * (uint32_t) v21);
+          ^
+/data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:254:5: error: no matching function for call to 'qwen3_decode_incore_6'
+    qwen3_decode_incore_6(all_q_padded__rv_v4, all_raw_scores__ssa_v0, block_table__ssa_v0, k_cache__rv_v4, b__idx_v0, ctx_blocks__ssa_v0, block_table_base__ssa_v0, BLOCK_TABLE_FLAT_DYN, KV_CACHE_ROWS_DYN, __pypto_spmd_block_idx, __pypto_spmd_block_num);
+    ^~~~~~~~~~~~~~~~~~~~~
+/data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:47:24: note: candidate function not viable: requires 12 arguments, but 11 were provided
+static __aicore__ void qwen3_decode_incore_6(__gm__ bfloat16_t* v1, __gm__ float* v2, __gm__ int32_t* v3, __gm__ bfloat16_t* v4, int32_t v5, int32_t v6, int32_t v7, int32_t v8, int32_t v9, int32_t v10, int32_t v11, int32_t v12) {
+                       ^
+90 warnings and 1 error generated.
+
+[RUN] runtime done (3.01s)
+Traceback (most recent call last):
+  File "/data/y00955915/Desktop/dependency-0514/pypto-lib/models/qwen3/14b/qwen3_14b_decode_spmd.py", line 1100, in <module>
+    result = run(
+             ^^^^
+  File "/data/y00955915/Desktop/dependency-0514/pypto-lib/golden/runner.py", line 320, in run
+    execute_compiled(work_dir, ordered, **config.runtime)
+  File "/data/y00955915/Desktop/dependency-0514/pypto/python/pypto/runtime/runner.py", line 781, in execute_compiled
+    chip_callable, runtime_name, runtime_config = compile_and_assemble(work_dir, platform, pto_isa_commit)
+                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/y00955915/Desktop/dependency-0514/pypto/python/pypto/runtime/device_runner.py", line 475, in compile_and_assemble
+    kernel_binaries = [f.result() for f in fut_kernels]
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/y00955915/Desktop/dependency-0514/pypto/python/pypto/runtime/device_runner.py", line 475, in <listcomp>
+    kernel_binaries = [f.result() for f in fut_kernels]
+                       ^^^^^^^^^^
+  File "/data/y00955915/.conda/envs/yhr-user/lib/python3.11/concurrent/futures/_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/data/y00955915/.conda/envs/yhr-user/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/data/y00955915/.conda/envs/yhr-user/lib/python3.11/concurrent/futures/thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/y00955915/Desktop/dependency-0514/pypto/python/pypto/runtime/device_runner.py", line 451, in _compile_one_kernel
+    _, kernel_bin = compile_single_kernel(kernel, compiler, platform, pto_isa_root, runtime_name)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/y00955915/Desktop/dependency-0514/pypto/python/pypto/runtime/device_runner.py", line 322, in compile_single_kernel
+    raw = compiler.compile_incore(
+          ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/y00955915/Desktop/dependency-0514/pypto/python/pypto/runtime/kernel_compiler.py", line 305, in compile_incore
+    return self._compile_to_bytes(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/y00955915/Desktop/dependency-0514/pypto/python/pypto/runtime/kernel_compiler.py", line 201, in _compile_to_bytes
+    self._run_subprocess(cmd, label, error_hint)
+  File "/data/y00955915/Desktop/dependency-0514/pypto/python/pypto/runtime/kernel_compiler.py", line 183, in _run_subprocess
+    raise RuntimeError(
+RuntimeError: Incore compilation failed with exit code 1:
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:24:
+/data/y00955915/pto-isa/include/pto/common/pto_tile.hpp:1514:55: warning: '&&' within '||' [-Wlogical-op-parentheses]
+                      (SFractal_ != SLayout::NoneBox) &&
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+/data/y00955915/pto-isa/include/pto/common/pto_tile.hpp:1514:55: note: place parentheses around the '&&' expression to silence this warning
+                      (SFractal_ != SLayout::NoneBox) &&
+                                                      ^
+                      (
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:64:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TAdd.hpp:66:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TAdd.hpp:65:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:65:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TAnd.hpp:78:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TAnd.hpp:79:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:66:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TOr.hpp:71:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TOr.hpp:70:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:67:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TXor.hpp:35:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TXor.hpp:34:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:68:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TShl.hpp:49:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TShl.hpp:48:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:69:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TShr.hpp:48:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TShr.hpp:49:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:74:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRem.hpp:103:18: warning: unused variable 'colsRemaining' [-Wunused-variable]
+        unsigned colsRemaining = validCols;
+                 ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRem.hpp:129:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRem.hpp:130:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:76:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFmod.hpp:52:18: warning: unused variable 'colsFmodaining' [-Wunused-variable]
+        unsigned colsFmodaining = validCols;
+                 ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFmod.hpp:73:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFmod.hpp:74:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:80:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TSub.hpp:65:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TSub.hpp:64:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:81:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TSels.hpp:26:24: warning: unused variable 'maskRowStride' [-Wunused-variable]
+    constexpr unsigned maskRowStride = MaskTile::RowStride;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TSels.hpp:27:24: warning: unused variable 'cmpmaskLen' [-Wunused-variable]
+    constexpr unsigned cmpmaskLen = sizeof(T) == 2 ? 4 : 2; // 128bit for B16 and 64bit for B32
+                       ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:82:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMin.hpp:66:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMin.hpp:65:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:86:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMax.hpp:64:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMax.hpp:65:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:92:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowSum.hpp:98:28: warning: unused variable 'tmpRowStride' [-Wunused-variable]
+        constexpr unsigned tmpRowStride = TileDataTmp::RowStride;
+                           ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:94:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowMax.hpp:68:28: warning: unused variable 'tmpRowStride' [-Wunused-variable]
+        constexpr unsigned tmpRowStride = TileDataTmp::RowStride;
+                           ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:95:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowMin.hpp:68:28: warning: unused variable 'tmpRowStride' [-Wunused-variable]
+        constexpr unsigned tmpRowStride = TileDataTmp::RowStride;
+                           ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:96:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowReduceIdxOps.hpp:72:24: warning: unused variable 'srcRptStride' [-Wunused-variable]
+    constexpr uint32_t srcRptStride = TileDataIn::Cols / elemPerBlock;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowReduceIdxOps.hpp:128:24: warning: unused variable 'srcRptStride' [-Wunused-variable]
+    constexpr uint32_t srcRptStride = TileDataIn::Cols / elemPerBlock;
+                       ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:97:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:272:24: warning: unused variable 'blockSizeElem' [-Wunused-variable]
+    constexpr unsigned blockSizeElem = BLOCK_BYTE_SIZE / sizeof(typename TileDataSrc::DType);
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:273:24: warning: unused variable 'dstStride' [-Wunused-variable]
+    constexpr unsigned dstStride = TileDataDst::RowStride;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:274:24: warning: unused variable 'srcStride' [-Wunused-variable]
+    constexpr unsigned srcStride = TileDataSrc::RowStride;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:299:24: warning: unused variable 'blockSizeElem' [-Wunused-variable]
+    constexpr unsigned blockSizeElem = BLOCK_BYTE_SIZE / sizeof(typename TileDataSrc::DType);
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:300:24: warning: unused variable 'dstStride' [-Wunused-variable]
+    constexpr unsigned dstStride = TileDataDst::RowStride;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:301:24: warning: unused variable 'srcStride' [-Wunused-variable]
+    constexpr unsigned srcStride = TileDataSrc::RowStride;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:371:24: warning: unused variable 'blockSizeElem' [-Wunused-variable]
+    constexpr unsigned blockSizeElem = BLOCK_BYTE_SIZE / sizeof(typename TileDataSrc::DType);
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:372:24: warning: unused variable 'dstStride' [-Wunused-variable]
+    constexpr unsigned dstStride = TileDataDst::RowStride;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TFillPad.hpp:373:24: warning: unused variable 'srcStride' [-Wunused-variable]
+    constexpr unsigned srcStride = TileDataSrc::RowStride;
+                       ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:99:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMatmul.hpp:64:33: warning: '&' within '|' [-Wbitwise-op-parentheses]
+    uint64_t xd = ((uint64_t)c) & 0xffffffffULL | ((((uint64_t)d) & 0xffffffffULL) << 32);
+                  ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~ ~
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMatmul.hpp:64:33: note: place parentheses around the '&' expression to silence this warning
+    uint64_t xd = ((uint64_t)c) & 0xffffffffULL | ((((uint64_t)d) & 0xffffffffULL) << 32);
+                                ^
+                  (                            )
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:100:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMrgSort.hpp:279:14: warning: unused variable 'dstCol' [-Wunused-variable]
+    uint32_t dstCol = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:102:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TExtract.hpp:135:24: warning: unused variable 'srcRowNum' [-Wunused-variable]
+    constexpr uint16_t srcRowNum = (srcRow * sizeof(SrcType)) >> SHIFT_BLOCK_BYTE;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TExtract.hpp:160:28: warning: unused variable 'srcColNum' [-Wunused-variable]
+        constexpr uint16_t srcColNum = srcCol * sizeof(SrcType) >> SHIFT_BLOCK_BYTE;
+                           ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TExtract.hpp:321:24: warning: unused variable 'srcRowNum' [-Wunused-variable]
+    constexpr uint16_t srcRowNum = (srcRow * sizeof(SrcType)) >> SHIFT_BLOCK_BYTE;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TExtract.hpp:346:28: warning: unused variable 'srcColNum' [-Wunused-variable]
+        constexpr uint16_t srcColNum = srcCol * sizeof(SrcType) >> SHIFT_BLOCK_BYTE;
+                           ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TExtract.hpp:417:14: warning: unused variable 'blockNum' [-Wunused-variable]
+    uint16_t blockNum = CUBE_BLOCK_SIZE / sizeof(SrcType);
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TExtract.hpp:443:24: warning: unused variable 'c0ElemCount' [-Wunused-variable]
+    constexpr uint32_t c0ElemCount = C0_SIZE_BYTE / sizeof(typename SrcTileData::DType);
+                       ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:103:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMov.hpp:57:25: warning: unused variable 'RELU_BIT' [-Wunused-variable]
+    constexpr const int RELU_BIT = 16;
+                        ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:104:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMul.hpp:64:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TMul.hpp:65:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:107:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TGather.hpp:39:14: warning: unused variable 'TShape0' [-Wunused-variable]
+    unsigned TShape0 = TileDataD::Rows;
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TGather.hpp:42:24: warning: unused variable 'blockSizeElem' [-Wunused-variable]
+    constexpr unsigned blockSizeElem = BLOCK_BYTE_SIZE / sizeof(typename TileDataD::DType);
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TGather.hpp:44:24: warning: unused variable 'stride' [-Wunused-variable]
+    constexpr unsigned stride = TileDataD::RowStride;
+                       ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TGather.hpp:46:14: warning: unused variable 'numRemainPerLine' [-Wunused-variable]
+    unsigned numRemainPerLine = validCol % elementsPerRepeat;
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TGather.hpp:47:14: warning: unused variable 'numLoop' [-Wunused-variable]
+    unsigned numLoop = numRepeatPerLine / REPEAT_MAX;
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TGather.hpp:48:14: warning: unused variable 'remainAfterLoop' [-Wunused-variable]
+    unsigned remainAfterLoop = numRepeatPerLine % REPEAT_MAX;
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:109:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TDiv.hpp:60:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TDiv.hpp:61:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:114:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TPartArgOp.hpp:49:24: warning: unused variable 'blockSizeElem' [-Wunused-variable]
+    constexpr unsigned blockSizeElem = BLOCK_BYTE_SIZE / sizeof(TVal);
+                       ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:124:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpand.hpp:90:9: warning: unused variable 'srcValidRow' [-Wunused-variable]
+    int srcValidRow = src.GetValidRow();
+        ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpand.hpp:91:9: warning: unused variable 'srcValidCol' [-Wunused-variable]
+    int srcValidCol = src.GetValidCol();
+        ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:125:
+In file included from /data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpandAdd.hpp:16:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpandBinOp.hpp:160:14: warning: unused variable 'repeatTimes' [-Wunused-variable]
+    unsigned repeatTimes = CeilDivision(validRow, 8);
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:125:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpandAdd.hpp:91:10: warning: unused variable 'src1eqdst' [-Wunused-variable]
+    bool src1eqdst = (validRow == src1ValidRow) && (validCol == src1ValidCol);
+         ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:126:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpandDiv.hpp:104:10: warning: unused variable 'src1eqdst' [-Wunused-variable]
+    bool src1eqdst = (validRow == src1ValidRow) && (validCol == src1ValidCol);
+         ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:127:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpandMax.hpp:91:10: warning: unused variable 'src1eqdst' [-Wunused-variable]
+    bool src1eqdst = (validRow == src1ValidRow) && (validCol == src1ValidCol);
+         ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:128:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpandMin.hpp:91:10: warning: unused variable 'src1eqdst' [-Wunused-variable]
+    bool src1eqdst = (validRow == src1ValidRow) && (validCol == src1ValidCol);
+         ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:129:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpandMul.hpp:91:10: warning: unused variable 'src1eqdst' [-Wunused-variable]
+    bool src1eqdst = (validRow == src1ValidRow) && (validCol == src1ValidCol);
+         ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:130:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TRowExpandSub.hpp:104:10: warning: unused variable 'src1eqdst' [-Wunused-variable]
+    bool src1eqdst = (validRow == src1ValidRow) && (validCol == src1ValidCol);
+         ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:136:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TBitwiseSOp.hpp:29:14: warning: unused variable 'dstValidRow' [-Wunused-variable]
+    unsigned dstValidRow = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TBitwiseSOp.hpp:30:14: warning: unused variable 'dstValidCol' [-Wunused-variable]
+    unsigned dstValidCol = dst.GetValidCol();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TBitwiseSOp.hpp:31:14: warning: unused variable 'srcValidRow' [-Wunused-variable]
+    unsigned srcValidRow = src.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TBitwiseSOp.hpp:32:14: warning: unused variable 'srcValidCol' [-Wunused-variable]
+    unsigned srcValidCol = src.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:144:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TPrelu.hpp:32:14: warning: unused variable 'validRows' [-Wunused-variable]
+    unsigned validRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TPrelu.hpp:33:14: warning: unused variable 'validCols' [-Wunused-variable]
+    unsigned validCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:147:
+In file included from /data/y00955915/pto-isa/include/pto/npu/a2a3/TColExpandAdd.hpp:16:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TColExpandBinOp.hpp:100:10: warning: unused variable 'src1eqdst' [-Wunused-variable]
+    bool src1eqdst = (validRow == src1ValidRow) && (validCol == src1ValidCol);
+         ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:155:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TDequant.hpp:127:14: warning: unused variable 'dstValidRows' [-Wunused-variable]
+    unsigned dstValidRows = dst.GetValidRow();
+             ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TDequant.hpp:128:14: warning: unused variable 'dstValidCols' [-Wunused-variable]
+    unsigned dstValidCols = dst.GetValidCol();
+             ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr_impl.hpp:156:
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TPush.hpp:184:27: warning: unused variable 'ConsM' [-Wunused-variable]
+            constexpr int ConsM = (Split == TileSplitAxis::TILE_UP_DOWN) ? ProdM * splitNum : ProdM;
+                          ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TPush.hpp:351:27: warning: unused variable 'ProdM' [-Wunused-variable]
+            constexpr int ProdM = (Split == TileSplitAxis::TILE_UP_DOWN) ? ConsM * splitNum : ConsM;
+                          ^
+/data/y00955915/pto-isa/include/pto/npu/a2a3/TPush.hpp:801:27: warning: unused variable 'VEC_CORES' [-Wunused-variable]
+            constexpr int VEC_CORES = (VCRatio == VecCubeRatio::V2C1_VECS) ? 2 : 1;
+                          ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:20:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_inst.hpp:16:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_instr_impl.hpp:23:
+In file included from /data/y00955915/pto-isa/include/pto/comm/a2a3/async/TPutAsync.hpp:14:
+/data/y00955915/pto-isa/include/pto/comm/async_common/TPutAsyncCommonDetail.hpp:83:20: warning: unused variable 'dstElems' [-Wunused-variable]
+    const uint32_t dstElems = TPutAsyncGetTotalElemCount(dstGlobalData);
+                   ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:20:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_inst.hpp:16:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_instr_impl.hpp:24:
+In file included from /data/y00955915/pto-isa/include/pto/comm/a2a3/async/TGetAsync.hpp:14:
+/data/y00955915/pto-isa/include/pto/comm/async_common/TGetAsyncCommonDetail.hpp:84:20: warning: unused variable 'dstElems' [-Wunused-variable]
+    const uint32_t dstElems = TGetAsyncGetTotalElemCount(dstGlobalData);
+                   ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:20:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_inst.hpp:16:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_instr_impl.hpp:27:
+/data/y00955915/pto-isa/include/pto/comm/a2a3/TWait.hpp:74:24: warning: unused variable 'kMaxSpinCount' [-Wunused-variable]
+    constexpr uint32_t kMaxSpinCount = 100000000; // Deadlock detection threshold
+                       ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:20:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_inst.hpp:16:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_instr_impl.hpp:30:
+/data/y00955915/pto-isa/include/pto/comm/a2a3/TGather.hpp:171:15: warning: unused variable 'rootIdx' [-Wunused-variable]
+    const int rootIdx = parallelGroup.GetRootIdx();
+              ^
+/data/y00955915/pto-isa/include/pto/comm/a2a3/TGather.hpp:401:15: warning: unused variable 'rootIdx' [-Wunused-variable]
+    const int rootIdx = parallelGroup.GetRootIdx();
+              ^
+In file included from /data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:18:
+In file included from /data/y00955915/pto-isa/include/pto/pto-inst.hpp:28:
+In file included from /data/y00955915/pto-isa/include/pto/common/pto_instr.hpp:20:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_inst.hpp:16:
+In file included from /data/y00955915/pto-isa/include/pto/comm/pto_comm_instr_impl.hpp:31:
+/data/y00955915/pto-isa/include/pto/comm/a2a3/TScatter.hpp:167:15: warning: unused variable 'rootIdx' [-Wunused-variable]
+    const int rootIdx = parallelGroup.GetRootIdx();
+              ^
+/data/y00955915/pto-isa/include/pto/comm/a2a3/TScatter.hpp:378:15: warning: unused variable 'rootIdx' [-Wunused-variable]
+    const int rootIdx = parallelGroup.GetRootIdx();
+              ^
+/data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:65:11: warning: unused variable 'v27' [-Wunused-variable]
+  int32_t v27 = (int32_t) ((uint32_t) v8 * (uint32_t) v21);
+          ^
+/data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:254:5: error: no matching function for call to 'qwen3_decode_incore_6'
+    qwen3_decode_incore_6(all_q_padded__rv_v4, all_raw_scores__ssa_v0, block_table__ssa_v0, k_cache__rv_v4, b__idx_v0, ctx_blocks__ssa_v0, block_table_base__ssa_v0, BLOCK_TABLE_FLAT_DYN, KV_CACHE_ROWS_DYN, __pypto_spmd_block_idx, __pypto_spmd_block_num);
+    ^~~~~~~~~~~~~~~~~~~~~
+/data/y00955915/Desktop/dependency-0514/pypto-lib/build_output/Qwen3DecodeSpmd_20260519_191220/kernels/aic/qwen3_decode_incore_6.cpp:47:24: note: candidate function not viable: requires 12 arguments, but 11 were provided
+static __aicore__ void qwen3_decode_incore_6(__gm__ bfloat16_t* v1, __gm__ float* v2, __gm__ int32_t* v3, __gm__ bfloat16_t* v4, int32_t v5, int32_t v6, int32_t v7, int32_t v8, int32_t v9, int32_t v10, int32_t v11, int32_t v12) {
+                       ^
+90 warnings and 1 error generated.
+

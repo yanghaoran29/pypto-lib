@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="1220" viewBox="0 0 920 1220">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#334155"/>
+    </marker>
+    <marker id="arrow-dash" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#64748b"/>
+    </marker>
+    <style>
+      .box { rx:6; ry:6; stroke-width:1.5; }
+      .t { font-family: ui-sans-serif, system-ui, sans-serif; font-size:12px; fill:#0f172a; }
+      .st { font-family: ui-sans-serif, system-ui, sans-serif; font-size:11px; fill:#475569; }
+      .edge { stroke:#334155; stroke-width:1.2; fill:none; marker-end:url(#arrow); }
+      .edge-d { stroke:#64748b; stroke-width:1.2; fill:none; stroke-dasharray:5 4; marker-end:url(#arrow-dash); }
+    </style>
+  </defs>
+  <text x="460" y="22" text-anchor="middle" class="t" font-weight="600" font-size="14">qwen3_14b_decode ����Vname_hint / pnA	</text>
+  <text x="460" y="40" text-anchor="middle" class="st">Scope1 � qk_norm � Scope2 �� � Scope3 MLP</text>
+  <!-- Scope 1 -->
+  <rect x="380" y="55" width="160" height="36" class="box" fill="#dbeafe" stroke="#2563eb"/>
+  <text x="460" y="78" text-anchor="middle" class="t">rmsnorm</text>
+  <rect x="200" y="115" width="120" height="34" class="box" fill="#e0e7ff" stroke="#4f46e5"/>
+  <text x="260" y="136" text-anchor="middle" class="t">q_proj</text>
+  <rect x="400" y="115" width="120" height="34" class="box" fill="#e0e7ff" stroke="#4f46e5"/>
+  <text x="460" y="136" text-anchor="middle" class="t">k_proj</text>
+  <rect x="600" y="115" width="120" height="34" class="box" fill="#e0e7ff" stroke="#4f46e5"/>
+  <text x="660" y="136" text-anchor="middle" class="t">v_proj</text>
+  <line x1="460" y1="91" x2="260" y2="115" class="edge"/>
+  <line x1="460" y1="91" x2="460" y2="115" class="edge"/>
+  <line x1="460" y1="91" x2="660" y2="115" class="edge"/>
+  <!-- qk_norm -->
+  <rect x="380" y="185" width="160" height="36" class="box" fill="#ede9fe" stroke="#7c3aed"/>
+  <text x="460" y="208" text-anchor="middle" class="t">qk_norm</text>
+  <line x1="260" y1="149" x2="420" y2="185" class="edge"/>
+  <line x1="460" y1="149" x2="460" y2="185" class="edge"/>
+  <!-- rope_kv_cache -->
+  <rect x="360" y="255" width="200" height="40" class="box" fill="#d1fae5" stroke="#059669"/>
+  <text x="460" y="280" text-anchor="middle" class="t">rope_kv_cache</text>
+  <line x1="460" y1="221" x2="460" y2="255" class="edge"/>
+  <path d="M 660 149 C 720 200 540 240 460 255" class="edge-d"/>
+  <text x="730" y="200" class="st">v 
+� qk_norm</text>
+  <!-- Attention chain (vertical) -->
+  <rect x="385" y="320" width="150" height="34" class="box" fill="#ccfbf1" stroke="#0d9488"/>
+  <text x="460" y="342" text-anchor="middle" class="t">qk_matmul</text>
+  <text x="555" y="342" class="st">Q�K@</text>
+  <line x1="460" y1="295" x2="460" y2="320" class="edge"/>
+  <rect x="395" y="390" width="130" height="34" class="box" fill="#ccfbf1" stroke="#0d9488"/>
+  <text x="460" y="412" text-anchor="middle" class="t">softmax</text>
+  <text x="540" y="412" class="st">exp I</text>
+  <line x1="460" y1="354" x2="460" y2="390" class="edge"/>
+  <rect x="395" y="460" width="130" height="34" class="box" fill="#ccfbf1" stroke="#0d9488"/>
+  <text x="460" y="482" text-anchor="middle" class="t">sv_matmul</text>
+  <text x="540" y="482" class="st">�V</text>
+  <line x1="460" y1="424" x2="460" y2="460" class="edge"/>
+  <rect x="370" y="530" width="180" height="34" class="box" fill="#ccfbf1" stroke="#0d9488"/>
+  <text x="460" y="552" text-anchor="middle" class="t">online_softmax</text>
+  <text x="565" y="552" class="st">�WRv</text>
+  <line x1="460" y1="494" x2="460" y2="530" class="edge"/>
+  <!-- attn_out implicit -->
+  <rect x="370" y="600" width="180" height="32" class="box" fill="#f1f5f9" stroke="#64748b" stroke-dasharray="4 3"/>
+  <text x="460" y="620" text-anchor="middle" class="t">attn_out ��</text>
+  <line x1="460" y1="564" x2="460" y2="600" class="edge"/>
+  <!-- Scope 3 -->
+  <rect x="320" y="660" width="260" height="36" class="box" fill="#ffedd5" stroke="#ea580c"/>
+  <text x="450" y="682" text-anchor="middle" class="t">out_proj_residual</text>
+  <line x1="460" y1="632" x2="450" y2="660" class="edge"/>
+  <path d="M 120 60 L 120 670 L 320 668" class="edge-d"/>
+  <text x="62" y="380" class="st">hidden_states</text>
+  <rect x="370" y="730" width="180" height="36" class="box" fill="#ffedd5" stroke="#ea580c"/>
+  <text x="460" y="752" text-anchor="middle" class="t">post_rmsnorm</text>
+  <line x1="450" y1="696" x2="460" y2="730" class="edge"/>
+  <!-- MLP chain (vertical) -->
+  <rect x="395" y="800" width="130" height="34" class="box" fill="#fed7aa" stroke="#c2410c"/>
+  <text x="460" y="822" text-anchor="middle" class="t">gate_proj</text>
+  <line x1="460" y1="766" x2="460" y2="800" class="edge"/>
+  <rect x="395" y="870" width="130" height="34" class="box" fill="#fed7aa" stroke="#c2410c"/>
+  <text x="460" y="892" text-anchor="middle" class="t">up_proj</text>
+  <line x1="460" y1="834" x2="460" y2="870" class="edge"/>
+  <path d="M 440 766 C 360 790 360 862 395 870" class="edge-d"/>
+  <rect x="395" y="940" width="130" height="34" class="box" fill="#fed7aa" stroke="#c2410c"/>
+  <text x="460" y="962" text-anchor="middle" class="t">silu</text>
+  <line x1="460" y1="904" x2="460" y2="940" class="edge"/>
+  <rect x="385" y="1010" width="150" height="34" class="box" fill="#fed7aa" stroke="#c2410c"/>
+  <text x="460" y="1032" text-anchor="middle" class="t">down_proj</text>
+  <line x1="460" y1="974" x2="460" y2="1010" class="edge"/>
+  <rect x="330" y="1080" width="220" height="34" class="box" fill="#fed7aa" stroke="#c2410c"/>
+  <text x="440" y="1102" text-anchor="middle" class="t">down_proj_residual</text>
+  <line x1="460" y1="1044" x2="440" y2="1080" class="edge"/>
+  <rect x="400" y="1150" width="120" height="32" class="box" fill="#fef3c7" stroke="#ca8a04"/>
+  <text x="460" y="1170" text-anchor="middle" class="t">out</text>
+  <line x1="440" y1="1114" x2="460" y2="1150" class="edge"/>
+  <!-- resid1_tile skip connection -->
+  <path d="M 320 678 C 100 700 100 1120 400 1158" class="edge-d"/>
+  <text x="72" y="900" class="st">resid1_tile �+����</text>
+
+    <text x="460" y="1208" text-anchor="middle" class="st">Z��6�/� batch "��pn�V�X�� hidden	</text>
+</svg>
