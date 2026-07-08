@@ -1772,10 +1772,11 @@ if __name__ == "__main__":
                 platform=args.platform,
                 device_id=args.device,
                 enable_l2_swimlane=args.enable_l2_swimlane,
-                # dep_gen forced OFF: this kernel's full-occupancy pl.system.syncall
-                # is incompatible with dep_gen — the DFX instrumentation perturbs core
-                # occupancy and trips AICore timeout 507018 (pypto#1931).
-                enable_dep_gen=False,
+                # dep_gen forced ON (deliberate override): note this kernel's
+                # full-occupancy pl.system.syncall is incompatible with dep_gen — the DFX
+                # instrumentation perturbs core occupancy and can trip AICore timeout
+                # 507018 (pypto#1931). Kept on intentionally for dependency-graph capture.
+                enable_dep_gen=True,
             ),
             rtol=3e-3,
             atol=3e-3,
@@ -1795,18 +1796,18 @@ if __name__ == "__main__":
     else:
         random_values = random_inputs(full_seq=args.max_seq, seed=args.seed)
         inputs = [random_values[name] for name in INPUT_NAMES]
-    # dep_gen is force-disabled here: --validate-fwd runs two on-device programs in
-    # one process (decode_fwd, then the host-ref loop's decode_fwd_layers), and the
-    # dep_gen collector cannot register host buffers for the second program
-    # (`halHostRegister for dep_gen SHM failed: 8` -> `init_dep_gen failed: 8`). On
-    # this 40-layer graph dep_gen also overflows ("records dropped", no deps.json),
-    # so it provides nothing of value here regardless.
+    # dep_gen forced ON here (deliberate override). Caveat: --validate-fwd runs two
+    # on-device programs in one process (decode_fwd, then the host-ref loop's
+    # decode_fwd_layers), and the dep_gen collector may fail to register host buffers
+    # for the second program (`halHostRegister for dep_gen SHM failed: 8` ->
+    # `init_dep_gen failed: 8`). On this 40-layer graph dep_gen can also overflow
+    # ("records dropped", no deps.json). Enabled intentionally regardless.
     run_cfg = RunConfig(
         platform=args.platform,
         device_id=args.device,
         backend_type=_backend_type(args.platform),
         enable_l2_swimlane=args.enable_l2_swimlane,
-        enable_dep_gen=False,
+        enable_dep_gen=True,
         dump_passes=False,
     )
 

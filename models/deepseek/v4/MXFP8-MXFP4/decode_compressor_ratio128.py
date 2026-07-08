@@ -1,0 +1,600 @@
+# Copyright (c) PyPTO Contributors.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# -----------------------------------------------------------------------------------------------------------
+"""DeepSeek-V4 KV Compressor (decode incremental, ratio=128 non-overlap).
+
+Uses non-overlapping state layout with 128 slots.
+Softmax+pool over all slots. No state shift needed."""
+
+import pypto.language as pl
+
+from config import (
+    FLASH as M,
+    BLOCK_SIZE,
+    C128_COMPRESSOR_BLOCK_SIZE,
+    DECODE_BATCH,
+    DECODE_SEQ,
+    DECODE_CMP_BLOCK_NUM,
+    KV_CMP_MAX_BLOCKS,
+)
+
+# Dynamic shape variables.
+B_DYN = pl.dynamic("B_DYN")
+S_DYN = pl.dynamic("S_DYN")
+COMPRESS_STATE_MAX_BLOCKS_DYN = pl.dynamic("COMPRESS_STATE_MAX_BLOCKS_DYN")
+COMPRESS_STATE_BLOCK_NUM_DYN = pl.dynamic("COMPRESS_STATE_BLOCK_NUM_DYN")
+CMP_BLOCK_NUM_DYN = pl.dynamic("CMP_BLOCK_NUM_DYN")
+
+# model config
+B = DECODE_BATCH
+S = DECODE_SEQ
+EPS = M.rms_norm_eps
+D = M.hidden_size
+HEAD_DIM = M.head_dim
+HEAD_DIM_INV = 1.0 / HEAD_DIM
+ROPE_HEAD_DIM = M.qk_rope_head_dim
+NOPE_HEAD_DIM = M.nope_head_dim
+MAX_SEQ_LEN = M.max_position_embeddings
+
+# kernel-local (ratio-128 non-overlap compressor)
+COMPRESS_RATIO = 128
+IDX_KV_LEN = MAX_SEQ_LEN // COMPRESS_RATIO
+COFF = 1
+OUT_DIM = COFF * HEAD_DIM
+STATE_LEN = COFF * COMPRESS_RATIO
+# Paged read contract:
+# - compress_state_block_table is still used to read the historical ratio window
+#   by absolute token position.
+# - Persistent writes are explicit token-major contracts:
+#     state_slot_mapping[b, s] -> flattened compressor-state row, -1 means no-write
+#     cmp_slot_mapping[b, s]   -> flattened compressed-KV row, -1 means no-write
+# - APE remains ratio-local:
+#     ape_row = position_ids[b, s] % COMPRESS_RATIO
+# - COMPRESS_STATE_MAX_BLOCKS=64 is only enough for the current tests
+#   (64 * 8 positions per request), not full MAX_SEQ_LEN coverage.
+COMPRESS_STATE_MAX_BLOCKS = 64
+COMPRESS_STATE_BLOCK_NUM = B * COMPRESS_STATE_MAX_BLOCKS
+COMPRESS_STATE_BLOCK_SIZE = C128_COMPRESSOR_BLOCK_SIZE
+COMPRESS_STATE_DIM = 2 * OUT_DIM
+CMP_MAX_BLOCKS = KV_CMP_MAX_BLOCKS
+CMP_BLOCK_NUM = DECODE_CMP_BLOCK_NUM
+if IDX_KV_LEN > CMP_MAX_BLOCKS * BLOCK_SIZE:
+    raise ValueError("ratio128 compressed KV cache capacity is smaller than max compressed sequence length")
+
+# tiling
+ROPE_TILE = 32
+K_TILE = 512
+OUT_TILE = 64
+HEAD_TILE = 64
+B_TILE = 8
+MM_B_TILE = 16
+BS_PAD = ((B * S + MM_B_TILE - 1) // MM_B_TILE) * MM_B_TILE
+RMS_TILE = 4
+RMS_PAD_TILE = 16
+RMS_PAD_TAIL = RMS_PAD_TILE - RMS_TILE
+RMS_PAD_ROWS = (B // RMS_TILE) * RMS_PAD_TILE
+# softmax_pool reduces over the state axis with column reductions (no transpose), so it can
+# afford a wider head tile than HEAD_TILE: each wider tile loads each state block fewer times
+# (HEAD_DIM/POOL_HEAD_TILE tiles/batch instead of HEAD_DIM/HEAD_TILE), cutting load redundancy.
+POOL_HEAD_TILE = 128
+
+
+@pl.jit.inline
+def compressor_ratio128(
+    x: pl.Tensor[[B_DYN, S_DYN, D], pl.BF16],
+    kv: pl.Tensor[[B_DYN, S_DYN, HEAD_DIM], pl.FP32],
+    compress_state: pl.Tensor[[COMPRESS_STATE_BLOCK_NUM_DYN, COMPRESS_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], pl.FP32],
+    compress_state_block_table: pl.Tensor[[B_DYN, COMPRESS_STATE_MAX_BLOCKS_DYN], pl.INT32],
+    wkv: pl.Tensor[[OUT_DIM, D], pl.BF16],
+    wgate: pl.Tensor[[OUT_DIM, D], pl.BF16],
+    ape: pl.Tensor[[COMPRESS_RATIO, OUT_DIM], pl.FP32],
+    norm_w: pl.Tensor[[HEAD_DIM], pl.BF16],
+    cos: pl.Tensor[[B_DYN, ROPE_HEAD_DIM // 2], pl.FP32],
+    sin: pl.Tensor[[B_DYN, ROPE_HEAD_DIM // 2], pl.FP32],
+    cmp_kv_cache: pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16],
+    position_ids: pl.Tensor[[B_DYN, S_DYN], pl.INT32],
+    cmp_slot_mapping: pl.Tensor[[B_DYN, S_DYN], pl.INT64],
+    state_slot_mapping: pl.Tensor[[B_DYN, S_DYN], pl.INT64],
+):
+    b_dim = pl.tensor.dim(x, 0)
+    s_dim = pl.tensor.dim(x, 1)
+    bs = b_dim * s_dim
+    compress_state_block_num = pl.tensor.dim(compress_state, 0)
+    cmp_block_num = pl.tensor.dim(cmp_kv_cache, 0)
+
+    x_flat = pl.reshape(x, [bs, D])
+    t_matmul = pl.max(bs, MM_B_TILE)
+    kv_proj_pad = pl.create_tensor([BS_PAD, OUT_DIM], dtype=pl.FP32)
+    score_proj_pad = pl.create_tensor([BS_PAD, OUT_DIM], dtype=pl.FP32)
+
+    for idx in pl.spmd(t_matmul * OUT_DIM // (MM_B_TILE * OUT_TILE), name_hint="kv_score_proj"):
+        global_row0 = (idx // (OUT_DIM // OUT_TILE)) * MM_B_TILE
+        o0 = (idx % (OUT_DIM // OUT_TILE)) * OUT_TILE
+        kv_acc = pl.create_tensor([MM_B_TILE, OUT_TILE], dtype=pl.FP32)
+        score_acc = pl.create_tensor([MM_B_TILE, OUT_TILE], dtype=pl.FP32)
+        for kb in pl.pipeline(0, D // K_TILE, stage=2):
+            k0 = kb * K_TILE
+            x_rows = pl.min(MM_B_TILE, bs - global_row0)
+            x_tile = pl.slice(x_flat, [MM_B_TILE, K_TILE], [global_row0, k0], valid_shape=[x_rows, K_TILE])
+            # Weights stored transposed [OUT_DIM, D] and consumed via b_trans=True so the
+            # GM->L1 load is a DN2ZN (each [OUT_TILE, K_TILE] row is K-contiguous = long
+            # bursts) instead of ND2NZ on [K_TILE, OUT_TILE] (K strided = many short
+            # bursts). Cuts the transaction-bound MTE2 cost. Matches ratio4/CSA layout.
+            wkv_tile = wkv[o0 : o0 + OUT_TILE, k0 : k0 + K_TILE]
+            wgate_tile = wgate[o0 : o0 + OUT_TILE, k0 : k0 + K_TILE]
+            if k0 == 0:
+                kv_acc = pl.matmul(x_tile, wkv_tile, out_dtype=pl.FP32, b_trans=True)
+                score_acc = pl.matmul(x_tile, wgate_tile, out_dtype=pl.FP32, b_trans=True)
+            else:
+                kv_acc = pl.matmul_acc(kv_acc, x_tile, wkv_tile, b_trans=True)
+                score_acc = pl.matmul_acc(score_acc, x_tile, wgate_tile, b_trans=True)
+
+        kv_proj_pad[global_row0 : global_row0 + MM_B_TILE, o0 : o0 + OUT_TILE] = kv_acc
+        score_proj_pad[global_row0 : global_row0 + MM_B_TILE, o0 : o0 + OUT_TILE] = score_acc
+
+    compress_state_flat = pl.reshape(compress_state, [compress_state_block_num, COMPRESS_STATE_BLOCK_SIZE * COMPRESS_STATE_DIM])
+
+    # state scatter reads the padded proj tensors directly by flat token row (no unpad pass).
+    with pl.at(level=pl.Level.CORE_GROUP, name_hint="state_scatter_pre") as scatter_tid:
+        for global_c_idx in pl.range(b_dim):
+            for s in pl.pipeline(s_dim, stage=2):
+                proj_row = global_c_idx * s_dim + s
+                token_pos = pl.read(position_ids, [global_c_idx, s])
+                token_ape_row = pl.cast(token_pos % COMPRESS_RATIO, target_type=pl.INDEX)
+                state_row = pl.cast(pl.read(state_slot_mapping, [global_c_idx, s]), target_type=pl.INDEX)
+                if state_row >= 0:
+                    state_blk_id = state_row // COMPRESS_STATE_BLOCK_SIZE
+                    state_intra = state_row % COMPRESS_STATE_BLOCK_SIZE
+                    slot_col0_s = state_intra * COMPRESS_STATE_DIM
+                    ape_row = ape[token_ape_row : token_ape_row + 1, 0 : OUT_DIM]
+                    kv_row = kv_proj_pad[proj_row : proj_row + 1, 0 : OUT_DIM]
+                    score_row = score_proj_pad[proj_row : proj_row + 1, 0 : OUT_DIM]
+                    score_row = pl.add(score_row, ape_row)
+                    compress_state_flat[state_blk_id : state_blk_id + 1, slot_col0_s : slot_col0_s + OUT_DIM] = kv_row
+                    compress_state_flat[state_blk_id : state_blk_id + 1, slot_col0_s + OUT_DIM : slot_col0_s + 2 * OUT_DIM] = score_row
+
+    pooled_kv = pl.create_tensor([RMS_PAD_ROWS, HEAD_DIM], dtype=pl.FP32)
+    with pl.spmd(RMS_PAD_ROWS * HEAD_DIM // (RMS_PAD_TILE * HEAD_TILE), name_hint="pooled_pad_init") as init_tid:
+        init_idx = pl.tile.get_block_idx()
+        pad_base = (init_idx // (HEAD_DIM // HEAD_TILE)) * RMS_PAD_TILE
+        h0 = (init_idx % (HEAD_DIM // HEAD_TILE)) * HEAD_TILE
+        pooled_kv[pad_base + RMS_TILE : pad_base + RMS_PAD_TILE, h0 : h0 + HEAD_TILE] = pl.full(
+            [RMS_PAD_TAIL, HEAD_TILE],
+            dtype=pl.FP32,
+            value=0.0,
+        )
+
+    # One GM row per compressed-state slot (block * BLOCK_SIZE + intra). This lets
+    # softmax_pool fetch a whole physical block's BLOCK_SIZE state rows in a single
+    # strided MTE2 instead of BLOCK_SIZE single-row gathers.
+    compress_state_rows = pl.reshape(
+        compress_state, [compress_state_block_num * COMPRESS_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM]
+    )
+    NUM_STATE_BLOCKS = STATE_LEN // COMPRESS_STATE_BLOCK_SIZE
+    with pl.spmd(b_dim * HEAD_DIM // POOL_HEAD_TILE, name_hint="softmax_pool", deps=[scatter_tid, init_tid]) as pool_tid:
+        idx = pl.tile.get_block_idx()
+        global_c_idx = idx // (HEAD_DIM // POOL_HEAD_TILE)
+        pad_idx = (global_c_idx // RMS_TILE) * RMS_PAD_TILE + (global_c_idx % RMS_TILE)
+        h0 = (idx % (HEAD_DIM // POOL_HEAD_TILE)) * POOL_HEAD_TILE
+        first_pos_gate = pl.read(position_ids, [global_c_idx, 0])
+        pos_gate = first_pos_gate % COMPRESS_RATIO
+        if pos_gate + S >= COMPRESS_RATIO:
+            softmax_score_state = pl.create_tensor([STATE_LEN, POOL_HEAD_TILE], dtype=pl.FP32)
+            softmax_kv_state = pl.create_tensor([STATE_LEN, POOL_HEAD_TILE], dtype=pl.FP32)
+            # The STATE_LEN contiguous state positions begin at a multiple of COMPRESS_RATIO
+            # (hence a multiple of COMPRESS_STATE_BLOCK_SIZE), so the window is exactly
+            # NUM_STATE_BLOCKS full physical blocks with no partial head/tail. Load each
+            # block's BLOCK_SIZE rows in ONE [BLOCK_SIZE, HEAD_TILE] strided MTE2 instead of
+            # BLOCK_SIZE separate [1, HEAD_TILE] row loads: 8x fewer transactions and no
+            # per-row UB staging. Bit-identical to the per-row gather.
+            compress_pos = first_pos_gate + (COMPRESS_RATIO - 1 - pos_gate)
+            state_pos0 = compress_pos - (COMPRESS_RATIO - 1)
+            base_logical_blk = state_pos0 // COMPRESS_STATE_BLOCK_SIZE
+            for blk_i in pl.pipeline(NUM_STATE_BLOCKS, stage=2):
+                state_blk_id = pl.cast(
+                    pl.read(compress_state_block_table, [global_c_idx, base_logical_blk + blk_i]),
+                    target_type=pl.INDEX,
+                )
+                row0 = state_blk_id * COMPRESS_STATE_BLOCK_SIZE
+                s0 = blk_i * COMPRESS_STATE_BLOCK_SIZE
+                slot_score = compress_state_rows[row0 : row0 + COMPRESS_STATE_BLOCK_SIZE, OUT_DIM + h0 : OUT_DIM + h0 + POOL_HEAD_TILE]
+                slot_kv = compress_state_rows[row0 : row0 + COMPRESS_STATE_BLOCK_SIZE, h0 : h0 + POOL_HEAD_TILE]
+                softmax_score_state[s0 : s0 + COMPRESS_STATE_BLOCK_SIZE, :] = slot_score
+                softmax_kv_state[s0 : s0 + COMPRESS_STATE_BLOCK_SIZE, :] = slot_kv
+
+            # Softmax over the state axis (rows) directly via column reductions, avoiding the two
+            # [STATE_LEN, *] transposes (VNCHWCONV) the row-reduce form needed. col_max/col_sum
+            # reduce over rows -> [1, POOL_HEAD_TILE]; col_expand_expdif fuses exp(x - col_max)
+            # and col_expand_mul broadcasts recip(sum) back over rows (col_expand_sub/div have no
+            # codegen; mul/expdif do). Same reduction over the same STATE_LEN values per head col.
+            score_max = pl.col_max(softmax_score_state)
+            score_exp = pl.col_expand_expdif(softmax_score_state, score_max)
+            score_sum = pl.col_sum(score_exp)
+            score_prob = pl.col_expand_mul(score_exp, pl.recip(score_sum))
+            pooled_chunk = pl.col_sum(pl.mul(softmax_kv_state, score_prob))
+            pooled_kv[pad_idx : pad_idx + 1, h0 : h0 + POOL_HEAD_TILE] = pooled_chunk
+
+    norm_w_2d = pl.reshape(norm_w, [1, HEAD_DIM])
+    normed_kv = pl.create_tensor([RMS_PAD_ROWS, HEAD_DIM], dtype=pl.FP32)
+
+    with pl.spmd(b_dim // RMS_TILE, name_hint="rmsnorm_rope", deps=[pool_tid]) as rms_tid:
+        batch_base_idx = pl.tile.get_block_idx()
+        batch_base = batch_base_idx * RMS_TILE
+        pad_base = batch_base_idx * RMS_PAD_TILE
+        cos_b = pl.full([RMS_PAD_TILE, ROPE_HEAD_DIM // 2], dtype=pl.FP32, value=0.0)
+        sin_b = pl.full([RMS_PAD_TILE, ROPE_HEAD_DIM // 2], dtype=pl.FP32, value=0.0)
+        cos_b[0:RMS_TILE, 0 : ROPE_HEAD_DIM // 2] = cos[batch_base : batch_base + RMS_TILE, 0 : ROPE_HEAD_DIM // 2]
+        sin_b[0:RMS_TILE, 0 : ROPE_HEAD_DIM // 2] = sin[batch_base : batch_base + RMS_TILE, 0 : ROPE_HEAD_DIM // 2]
+        partial_sq = pl.full([1, RMS_PAD_TILE], dtype=pl.FP32, value=0.0)
+        for rms_kb in pl.pipeline(HEAD_DIM // HEAD_TILE, stage=2):
+            rms_h0 = rms_kb * HEAD_TILE
+            kv_rms_chunk = pooled_kv[pad_base : pad_base + RMS_PAD_TILE, rms_h0 : rms_h0 + HEAD_TILE]
+            kv_rms_sq = pl.mul(kv_rms_chunk, kv_rms_chunk)
+            kv_rms_rowsum = pl.reshape(pl.row_sum(kv_rms_sq), [1, RMS_PAD_TILE])
+            partial_sq = pl.add(partial_sq, kv_rms_rowsum)
+
+        variance = pl.reshape(pl.add(pl.mul(partial_sq, HEAD_DIM_INV), EPS), [RMS_PAD_TILE, 1])
+        inv_rms = pl.recip(pl.sqrt(variance))
+        for rms_kb in pl.pipeline(NOPE_HEAD_DIM // HEAD_TILE, stage=2):
+            norm_h0 = rms_kb * HEAD_TILE
+            kv_norm_chunk = pooled_kv[pad_base : pad_base + RMS_PAD_TILE, norm_h0 : norm_h0 + HEAD_TILE]
+            gamma = pl.cast(norm_w_2d[:, norm_h0 : norm_h0 + HEAD_TILE], pl.FP32)
+            normed_chunk = pl.col_expand_mul(pl.row_expand_mul(kv_norm_chunk, inv_rms), gamma)
+            normed_kv[pad_base : pad_base + RMS_PAD_TILE, norm_h0 : norm_h0 + HEAD_TILE] = normed_chunk
+
+        kv_rope_norm = pooled_kv[pad_base : pad_base + RMS_PAD_TILE, NOPE_HEAD_DIM : HEAD_DIM]
+        gamma_rope = pl.cast(norm_w_2d[:, NOPE_HEAD_DIM : HEAD_DIM], pl.FP32)
+        # A3 interleaved swap-gather (same form as kv_rope_fused in qkv_proj_rope),
+        # replacing the de-interleave gather + rotate + re-interleave scatter. gamma+inv_rms
+        # are folded into rope_normed BEFORE the swap, so the swapped lane n[j^1] correctly
+        # carries gamma[j^1]; inv_rms is per-row so it commutes. swap_idx (j^1), sign
+        # ([-1,+1,...]) and dup_idx (j>>1) are built IN-KERNEL from pl.arange; cos_il/sin_il
+        # are dup-gathered from the per-batch cos/sin rows. normed_kv is FP32 -> write directly.
+        #   out[j] = n[j]*cos_il[j] + n[j^1]*sign[j]*sin_il[j]
+        rope_normed = pl.col_expand_mul(pl.row_expand_mul(kv_rope_norm, inv_rms), gamma_rope)
+        # half-split (NeoX) forward RoPE on the normed+gamma'd chunk: pair lane i with i+HALF.
+        rope_lo = rope_normed[0 : RMS_PAD_TILE, 0 : ROPE_HEAD_DIM // 2]
+        rope_hi = rope_normed[0 : RMS_PAD_TILE, ROPE_HEAD_DIM // 2 : ROPE_HEAD_DIM]
+        rope_rot = pl.concat(pl.sub(pl.mul(rope_lo, cos_b), pl.mul(rope_hi, sin_b)),
+                             pl.add(pl.mul(rope_hi, cos_b), pl.mul(rope_lo, sin_b)))
+        normed_kv[pad_base : pad_base + RMS_PAD_TILE, NOPE_HEAD_DIM : HEAD_DIM] = rope_rot
+
+    kv_flat = pl.reshape(kv, [bs, HEAD_DIM])
+    cmp_flat_rows = cmp_block_num * BLOCK_SIZE
+    cmp_kv_cache_flat = pl.reshape(cmp_kv_cache, [cmp_flat_rows, HEAD_DIM])
+
+    with pl.spmd(b_dim // RMS_TILE, name_hint="kv_finalize", deps=[rms_tid]) as _write_tid:
+        batch_base_idx = pl.tile.get_block_idx()
+        batch_base = batch_base_idx * RMS_TILE
+        pad_base = batch_base_idx * RMS_PAD_TILE
+        for inner in pl.range(RMS_TILE):
+            global_c_idx = batch_base + inner
+            first_pos_b = pl.read(position_ids, [global_c_idx, 0])
+            pos_b = first_pos_b % COMPRESS_RATIO
+            if pos_b + s_dim >= COMPRESS_RATIO:
+                boundary_s = COMPRESS_RATIO - 1 - pos_b
+                kv_row = normed_kv[pad_base + inner : pad_base + inner + 1, 0 : HEAD_DIM]
+                kv_flat[global_c_idx * s_dim : global_c_idx * s_dim + 1, :] = kv_row
+                cmp_row = pl.cast(pl.read(cmp_slot_mapping, [global_c_idx, boundary_s]), target_type=pl.INDEX)
+                if cmp_row >= 0:
+                    cmp_kv_cache_flat[cmp_row : cmp_row + 1, :] = pl.cast(kv_row, target_type=pl.BF16, mode="rint")
+
+    kv = pl.reshape(kv_flat, [b_dim, s_dim, HEAD_DIM])
+    return kv
+
+
+@pl.jit
+def compressor_test(
+    x: pl.Tensor[[B_DYN, S_DYN, D], pl.BF16],
+    kv: pl.Out[pl.Tensor[[B_DYN, S_DYN, HEAD_DIM], pl.FP32]],
+    compress_state: pl.InOut[pl.Tensor[[COMPRESS_STATE_BLOCK_NUM_DYN, COMPRESS_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], pl.FP32]],
+    compress_state_block_table: pl.Tensor[[B_DYN, COMPRESS_STATE_MAX_BLOCKS_DYN], pl.INT32],
+    wkv: pl.Tensor[[OUT_DIM, D], pl.BF16],
+    wgate: pl.Tensor[[OUT_DIM, D], pl.BF16],
+    ape: pl.Tensor[[COMPRESS_RATIO, OUT_DIM], pl.FP32],
+    norm_w: pl.Tensor[[HEAD_DIM], pl.BF16],
+    cos: pl.Tensor[[B_DYN, ROPE_HEAD_DIM // 2], pl.FP32],
+    sin: pl.Tensor[[B_DYN, ROPE_HEAD_DIM // 2], pl.FP32],
+    cmp_kv_cache: pl.InOut[pl.Tensor[[CMP_BLOCK_NUM_DYN, BLOCK_SIZE, 1, HEAD_DIM], pl.BF16]],
+    position_ids: pl.Tensor[[B_DYN, S_DYN], pl.INT32],
+    cmp_slot_mapping: pl.Tensor[[B_DYN, S_DYN], pl.INT64],
+    state_slot_mapping: pl.Tensor[[B_DYN, S_DYN], pl.INT64],
+):
+    x.bind_dynamic(0, B_DYN)
+    x.bind_dynamic(1, S_DYN)
+    kv.bind_dynamic(0, B_DYN)
+    kv.bind_dynamic(1, S_DYN)
+    compress_state.bind_dynamic(0, COMPRESS_STATE_BLOCK_NUM_DYN)
+    compress_state_block_table.bind_dynamic(0, B_DYN)
+    compress_state_block_table.bind_dynamic(1, COMPRESS_STATE_MAX_BLOCKS_DYN)
+    cos.bind_dynamic(0, B_DYN)
+    sin.bind_dynamic(0, B_DYN)
+    cmp_kv_cache.bind_dynamic(0, CMP_BLOCK_NUM_DYN)
+    position_ids.bind_dynamic(0, B_DYN)
+    position_ids.bind_dynamic(1, S_DYN)
+    cmp_slot_mapping.bind_dynamic(0, B_DYN)
+    cmp_slot_mapping.bind_dynamic(1, S_DYN)
+    state_slot_mapping.bind_dynamic(0, B_DYN)
+    state_slot_mapping.bind_dynamic(1, S_DYN)
+
+    compressor_ratio128(
+        x, kv, compress_state, compress_state_block_table, wkv, wgate, ape, norm_w, cos, sin,
+        cmp_kv_cache, position_ids, cmp_slot_mapping, state_slot_mapping,
+    )
+    return kv, compress_state, cmp_kv_cache
+
+
+def golden_compressor(tensors):
+    """Torch reference for Compressor.forward (decode branch, ratio=128 non-overlap).
+
+    Operates on paged caches: compress_state (kv + score channels merged) and cmp_kv_cache,
+    each addressed via the corresponding block_table.
+    """
+    import torch
+
+    x = tensors["x"].float()
+    compress_state_block_table = tensors["compress_state_block_table"]
+    position_ids = tensors["position_ids"].to(torch.int64)
+    cmp_slot_mapping = tensors["cmp_slot_mapping"].to(torch.int64)
+    state_slot_mapping = tensors["state_slot_mapping"].to(torch.int64)
+    # Historical state reads still use absolute-position block-table addressing.
+    # Persistent writes use token-major slot mappings. APE remains modulo ratio.
+    compress_state = tensors["compress_state"]
+
+    def read_state_row(b, pos):
+        logical_blk = pos // COMPRESS_STATE_BLOCK_SIZE
+        intra = pos % COMPRESS_STATE_BLOCK_SIZE
+        sblk = int(compress_state_block_table[b, logical_blk].item())
+        return (
+            compress_state[sblk, intra, :OUT_DIM],
+            compress_state[sblk, intra, OUT_DIM:2 * OUT_DIM],
+        )
+
+    def write_state_row(slot, kv_row, score_row):
+        if slot < 0:
+            return
+        sblk = slot // COMPRESS_STATE_BLOCK_SIZE
+        intra = slot % COMPRESS_STATE_BLOCK_SIZE
+        compress_state[sblk, intra, :OUT_DIM] = kv_row
+        compress_state[sblk, intra, OUT_DIM:2 * OUT_DIM] = score_row
+
+    wkv = tensors["wkv"].float()
+    wgate = tensors["wgate"].float()
+    ape = tensors["ape"]
+    norm_w = tensors["norm_w"]
+    cos = tensors["cos"]
+    sin = tensors["sin"]
+    cmp_kv_cache = tensors["cmp_kv_cache"]
+    bsz, _, _ = x.shape
+    ratio, rd = COMPRESS_RATIO, ROPE_HEAD_DIM
+
+    kv = x @ wkv.t()                    # [B, S, OUT_DIM]  (wkv stored [OUT_DIM, D] for b_trans)
+    score = x @ wgate.t()               # [B, S, OUT_DIM]
+    pooled = torch.zeros(bsz, 1, HEAD_DIM, dtype=torch.float32, device=x.device)
+    should_compress_rows = torch.zeros(bsz, dtype=torch.bool, device=x.device)
+
+    for b in range(bsz):
+        boundary_s = None
+        for s in range(S):
+            pos = int(position_ids[b, s].item())
+            token_ape_row = pos % ratio
+            score[b, s, :] = score[b, s, :] + ape[token_ape_row]
+            write_state_row(int(state_slot_mapping[b, s].item()), kv[b, s, :], score[b, s, :])
+            if (pos + 1) % ratio == 0:
+                boundary_s = s
+
+        if boundary_s is not None:
+            should_compress_rows[b] = True
+            compress_pos = int(position_ids[b, boundary_s].item())
+            kv_rows = []
+            score_rows = []
+            for pos in range(compress_pos - ratio + 1, compress_pos + 1):
+                kv_row, score_row = read_state_row(b, pos)
+                kv_rows.append(kv_row)
+                score_rows.append(score_row)
+            kv_state = torch.stack(kv_rows, dim=0).unsqueeze(0)
+            score_state = torch.stack(score_rows, dim=0).unsqueeze(0)
+            pooled[b : b + 1] = (kv_state * score_state.softmax(dim=1)).sum(dim=1, keepdim=True)
+    tensors["compress_state"][:] = compress_state
+
+    if not bool(should_compress_rows.any()):
+        return
+
+    def rmsnorm(x, w):
+        x = x.float()
+        var = x.square().mean(-1, keepdim=True)
+        x = x * torch.rsqrt(var + EPS)
+        return w * x
+
+    for b in range(bsz):
+        if not bool(should_compress_rows[b]):
+            continue
+        kv_b = rmsnorm(pooled[b : b + 1], norm_w)
+
+        # half-split (NeoX): pair lane i with lane i+rd//2 (contiguous halves).
+        rope_seg = kv_b[..., -rd:]
+        x_lo, x_hi = rope_seg[..., :rd // 2], rope_seg[..., rd // 2:]
+        cos_v, sin_v = cos[b].view(-1), sin[b].view(-1)
+        y_lo = x_lo * cos_v - x_hi * sin_v
+        y_hi = x_lo * sin_v + x_hi * cos_v
+
+        kv_b = torch.cat([kv_b[..., :-rd], torch.cat([y_lo, y_hi], dim=-1)], dim=-1)
+
+        # Kernel writes pooled result only to kv[:, 0, :]; leave kv[:, 1:, :] = 0.
+        tensors["kv"][b : b + 1, 0:1, :] = kv_b
+
+        boundary_positions = torch.nonzero((position_ids[b, :S] + 1) % ratio == 0, as_tuple=False).flatten()
+        if int(boundary_positions.numel()) == 0:
+            continue
+        boundary_s = int(boundary_positions[0].item())
+        cmp_row = int(cmp_slot_mapping[b, boundary_s].item())
+        if cmp_row >= 0:
+            cblk = cmp_row // BLOCK_SIZE
+            intra_offset = cmp_row % BLOCK_SIZE
+            cmp_kv_cache[cblk, intra_offset, 0] = kv_b[0, 0]
+
+    tensors["cmp_kv_cache"][:] = cmp_kv_cache
+
+
+def build_tensor_specs(start_pos=None):
+    import torch  # type: ignore[import]
+    from golden import TensorSpec
+    from rope_tables import build_deepseek_v4_rope_tables, materialize_half_rope_tables
+
+    shared_freqs_cos, shared_freqs_sin = build_deepseek_v4_rope_tables(M, COMPRESS_RATIO, dtype=torch.bfloat16)
+
+    def init_x():
+        return torch.rand(B, S, D)
+    def init_compress_state():
+        return torch.zeros(COMPRESS_STATE_BLOCK_NUM, COMPRESS_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM)
+    # Calibrated to the real DeepSeek-V4-Flash 150
+    #  (ratio-128) main compressor (mean l7/l9 of
+    # extract_weights_flash): zero-mean Gaussian BF16 weights at the measured std; the RMSNorm
+    # gamma centers near the measured mean (not ones / not uniform).
+    def init_wkv():
+        return torch.randn(OUT_DIM, D) * 0.0246
+    def init_wgate():
+        return torch.randn(OUT_DIM, D) * 0.0316
+    def init_ape():
+        return torch.randn(COMPRESS_RATIO, OUT_DIM) * 0.0340
+    def init_norm_w():
+        return 0.1001 + 0.0549 * torch.randn(HEAD_DIM)
+    def init_rope_positions():
+        first_pos = init_position_ids().to(torch.int64)[:, 0]
+        cmp_offset = COMPRESS_RATIO - (first_pos % COMPRESS_RATIO)
+        return (first_pos + cmp_offset - COMPRESS_RATIO).to(torch.int64)
+    def init_cos():
+        return materialize_half_rope_tables(shared_freqs_cos, shared_freqs_sin, init_rope_positions())[0]
+    def init_sin():
+        return materialize_half_rope_tables(shared_freqs_cos, shared_freqs_sin, init_rope_positions())[1]
+    def init_cmp_kv_cache():
+        return torch.zeros(CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM)
+    def init_compress_state_block_table():
+        # Always non-contiguous: swap logical blocks 0<->31 so the fixture
+        # validates block-table indirection rather than a contiguous layout.
+        tbl = torch.arange(B * COMPRESS_STATE_MAX_BLOCKS, dtype=torch.int32).view(B, COMPRESS_STATE_MAX_BLOCKS)
+        for b in range(B):
+            tbl[b, 0], tbl[b, 31] = tbl[b, 31].clone(), tbl[b, 0].clone()
+        return tbl
+    def init_cmp_block_table():
+        tbl = torch.arange(B * CMP_MAX_BLOCKS, dtype=torch.int32).view(B, CMP_MAX_BLOCKS)
+        for b in range(B):
+            tbl[b, 0], tbl[b, 1] = tbl[b, 1].clone(), tbl[b, 0].clone()
+        return tbl
+    def init_start_pos():
+        if start_pos is not None:
+            return torch.full((B,), start_pos, dtype=torch.int32)
+        # Default per-batch pattern covers every ratio-128 decode branch:
+        #   STATE_BLK-1 : no-compress, two MTP tokens straddle the state page (size 8)
+        #   10          : no-compress, mid-window, single state page
+        #   RATIO-S     : compress, boundary on 2nd token (pre-scatter writes both)
+        #   RATIO-1     : compress, boundary on 1st token (2nd token spills to next window)
+        #   2*RATIO-S   : compress aligned in the 2nd compressed block (cache_col=1)
+        #   2*RATIO-1   : compress crossing in the 2nd block (state logical block 31->32)
+        pattern = torch.tensor([
+            COMPRESS_STATE_BLOCK_SIZE - 1,
+            10,
+            COMPRESS_RATIO - S,
+            COMPRESS_RATIO - 1,
+            COMPRESS_RATIO * 2 - S,
+            COMPRESS_RATIO * 2 - 1,
+        ], dtype=torch.int32)
+        vals = torch.empty((B,), dtype=torch.int32)
+        for b in range(B):
+            vals[b] = pattern[b % int(pattern.numel())]
+        return vals
+    def init_position_ids():
+        starts = init_start_pos().to(torch.int64)
+        positions = torch.empty((B, S), dtype=torch.int32)
+        for b in range(B):
+            for s in range(S):
+                positions[b, s] = starts[b] + s
+        return positions
+    def init_state_slot_mapping():
+        positions = init_position_ids().to(torch.int64)
+        block_table = init_compress_state_block_table().to(torch.int64)
+        mapping = torch.full((B, S), -1, dtype=torch.int64)
+        for b in range(B):
+            for s in range(S):
+                pos = int(positions[b, s].item())
+                logical_blk = pos // COMPRESS_STATE_BLOCK_SIZE
+                intra = pos % COMPRESS_STATE_BLOCK_SIZE
+                blk = int(block_table[b, logical_blk].item())
+                mapping[b, s] = blk * COMPRESS_STATE_BLOCK_SIZE + intra
+        return mapping
+    def init_cmp_slot_mapping():
+        positions = init_position_ids().to(torch.int64)
+        block_table = init_cmp_block_table().to(torch.int64)
+        mapping = torch.full((B, S), -1, dtype=torch.int64)
+        for b in range(B):
+            for s in range(S):
+                pos = int(positions[b, s].item())
+                if (pos + 1) % COMPRESS_RATIO == 0:
+                    cache_col = pos // COMPRESS_RATIO
+                    logical_blk = cache_col // BLOCK_SIZE
+                    intra = cache_col % BLOCK_SIZE
+                    blk = int(block_table[b, logical_blk].item())
+                    mapping[b, s] = blk * BLOCK_SIZE + intra
+        return mapping
+    return [
+        TensorSpec("x", [B, S, D], torch.bfloat16, init_value=init_x),
+        TensorSpec("kv", [B, S, HEAD_DIM], torch.float32, is_output=True),
+        TensorSpec("compress_state", [COMPRESS_STATE_BLOCK_NUM, COMPRESS_STATE_BLOCK_SIZE, COMPRESS_STATE_DIM], torch.float32, init_value=init_compress_state, is_output=True),
+        TensorSpec("compress_state_block_table", [B, COMPRESS_STATE_MAX_BLOCKS], torch.int32, init_value=init_compress_state_block_table),
+        TensorSpec("wkv", [OUT_DIM, D], torch.bfloat16, init_value=init_wkv),
+        TensorSpec("wgate", [OUT_DIM, D], torch.bfloat16, init_value=init_wgate),
+        TensorSpec("ape", [COMPRESS_RATIO, OUT_DIM], torch.float32, init_value=init_ape),
+        TensorSpec("norm_w", [HEAD_DIM], torch.bfloat16, init_value=init_norm_w),
+        TensorSpec("cos", [B, ROPE_HEAD_DIM // 2], torch.float32, init_value=init_cos),
+        TensorSpec("sin", [B, ROPE_HEAD_DIM // 2], torch.float32, init_value=init_sin),
+        TensorSpec("cmp_kv_cache", [CMP_BLOCK_NUM, BLOCK_SIZE, 1, HEAD_DIM], torch.bfloat16, init_value=init_cmp_kv_cache, is_output=True),
+        TensorSpec("position_ids", [B, S], torch.int32, init_value=init_position_ids),
+        TensorSpec("cmp_slot_mapping", [B, S], torch.int64, init_value=init_cmp_slot_mapping),
+        TensorSpec("state_slot_mapping", [B, S], torch.int64, init_value=init_state_slot_mapping),
+    ]
+
+
+if __name__ == "__main__":
+    import argparse
+    from golden import ratio_allclose, run_jit
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-p", "--platform", type=str, default="a2a3",
+                        choices=["a2a3", "a2a3sim", "a5", "a5sim"])
+    parser.add_argument("-d", "--device", type=int, default=0)
+    parser.add_argument("--start-pos", type=int, default=None,
+                        help="Fixture-only compatibility seed for position_ids and slot mappings; "
+                             "otherwise use the default per-batch coverage pattern.")
+    parser.add_argument("--enable-l2-swimlane", action="store_true", default=False)
+    parser.add_argument("--dump-passes", action="store_true", default=False)
+    args = parser.parse_args()
+
+    result = run_jit(
+        fn=compressor_test,
+        specs=build_tensor_specs(args.start_pos),
+        golden_fn=golden_compressor,
+        compile_cfg=dict(dump_passes=args.dump_passes),
+        runtime_cfg=dict(
+            platform=args.platform,
+            device_id=args.device,
+            enable_l2_swimlane=args.enable_l2_swimlane,
+        ),
+        rtol=1e-3,
+        atol=1e-3,
+        # Precision reference: AscendC torch.ops.custom.compressor —
+        # ops-transformer/experimental/attention/compressor/tests/pytest/compressor_golden.py
+        compare_fn={
+            "kv":            ratio_allclose(atol=1e-4, rtol=1.0 / 128, max_error_ratio=0.0),
+            "compress_state": ratio_allclose(atol=1e-3, rtol=1e-3, max_error_ratio=0.0),
+            "cmp_kv_cache":   ratio_allclose(atol=1e-4, rtol=1.0 / 128, max_error_ratio=0.0),
+        },
+    )
+    if not result.passed:
+        if result.error:
+            print(result.error)
+        raise SystemExit(1)

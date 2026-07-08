@@ -1,0 +1,48 @@
+任务已提交: task_20260708_172059_2779754789 (断开后可用 task-submit --wait task_20260708_172059_2779754789 重连)
+等待任务执行: task_20260708_172059_2779754789 (Ctrl+C 终止任务)
+[npu-lock] 获取设备 0 的锁 (无超时)...
+[npu-lock] 已获取设备 0 的锁 (pid=2779811)
+[RUN] compile ...
+2026-07-08 17:21:03.165 I | [perf_hint] 33 hints across 30 sites; see build_output/_jit_attention_swa_test_20260708_172102/report/perf_hints.log
+[RUN] compile done (1.66s)
+[RUN] generate inputs ...
+[RUN] generate inputs done (0.59s)
+[RUN] compute golden ...
+[RUN] compute golden done (0.29s)
+[RUN] runtime ...
+[2026-07-08 17:21:13.883050][T0xffffa66f9420][INFO_V9] ~StraceScope: [strace.h:129] [STRACE] v=1 pid=2779831 tid=2779831 inv=1 hid=a5d97ed91a288e10 depth=2 name=simpler_run.bind.args ts=1028494683691100 dur=4792500 
+[2026-07-08 17:21:13.889085][T0xffffa66f9420][INFO_V9] ~StraceScope: [strace.h:129] [STRACE] v=1 pid=2779831 tid=2779831 inv=1 hid=a5d97ed91a288e10 depth=2 name=simpler_run.bind.prebuilt ts=1028494688518430 dur=5999210 
+[2026-07-08 17:21:13.889111][T0xffffa66f9420][INFO_V9] ~StraceScope: [strace.h:129] [STRACE] v=1 pid=2779831 tid=2779831 inv=1 hid=a5d97ed91a288e10 depth=1 name=simpler_run.bind ts=1028494683051580 dur=11493520 
+[2026-07-08 17:21:13.894789][T0xffffa66f9420][WARN] query_cpu_topo: [aicpu_topology_probe.cpp:118] aicpu_topology_probe: halGetDeviceInfoByBuff(CPU_TOPO) rc=65534 total=0
+[2026-07-08 17:21:59.511855][T0xffffa66f9420][ERROR] sync_run_streams: [device_runner_base.cpp:1276] aclrtSynchronizeStreamWithTimeout (AICPU) failed: 507000
+[2026-07-08 17:21:59.512067][T0xffffa66f9420][ERROR] recover_device_or_mark_unusable: [device_runner.cpp:465] AICore error 507000: bounded device drain failed: 507000 (force reset will follow in finalize)
+[2026-07-08 17:21:59.512101][T0xffffa66f9420][INFO_V9] ~StraceScope: [strace.h:129] [STRACE] v=1 pid=2779831 tid=2779831 inv=1 hid=a5d97ed91a288e10 depth=1 name=simpler_run.runner_run ts=1028494694556770 dur=45622978930 
+[2026-07-08 17:21:59.512142][T0xffffa66f9420][ERROR] validate_runtime_impl: [runtime_maker.cpp:935] PTO2 runtime failed: orch_error_code=0 sched_error_code=100 runtime_status=-100
+[2026-07-08 17:21:59.512151][T0xffffa66f9420][ERROR] validate_runtime_impl: [runtime_maker.cpp:944] PTO2 scheduler timeout sub_class=S1:running-stalled (detail=1) completed=23/135 running=2 ready=0 waiting=110 orch_done=1 stuck_task_id=4294967305 stuck_core=36
+[2026-07-08 17:21:59.512156][T0xffffa66f9420][WARN] validate_runtime_impl: [runtime_maker.cpp:967] Skipping tensor copy-back because PTO2 runtime reported fatal status
+[2026-07-08 17:21:59.512165][T0xffffa66f9420][INFO_V9] ~StraceScope: [strace.h:129] [STRACE] v=1 pid=2779831 tid=2779831 inv=1 hid=a5d97ed91a288e10 depth=0 name=simpler_run ts=1028494683039950 dur=45634559700 
+[2026-07-08 17:22:05.043361][T0xffffa66f9420][WARN] force_reset_device: [device_runner.cpp:621] force_reset_device: aclrtResetDeviceForce(0) cleared the poisoned card (probe confirmed clean)
+[RUN] runtime done (64.05s)
+Traceback (most recent call last):
+  File "/home/pyptouser/yanghaoran/Desktop/pypto-lib/models/deepseek/v4/MXFP8-MXFP4/decode_attention_swa.py", line 564, in <module>
+    result = run_jit(
+             ^^^^^^^^
+  File "/home/pyptouser/yanghaoran/Desktop/pypto-lib/golden/runner.py", line 1116, in run_jit
+    _execute_via_runner(work_dir, specs, tensors, scalar_specs_eff, runtime_cfg)
+  File "/home/pyptouser/yanghaoran/Desktop/pypto-lib/golden/runner.py", line 325, in _execute_via_runner
+    execute_compiled(work_dir, ordered, **_execute_compiled_kwargs(runtime_cfg))
+  File "/home/pyptouser/yanghaoran/Desktop/pypto/python/pypto/runtime/runner.py", line 1360, in execute_compiled
+    _execute_dfx_passes(_run_pass, _capture_deps, dfx, platform)
+  File "/home/pyptouser/yanghaoran/Desktop/pypto/python/pypto/runtime/runner.py", line 570, in _execute_dfx_passes
+    run_pass(dfx)
+  File "/home/pyptouser/yanghaoran/Desktop/pypto/python/pypto/runtime/runner.py", line 1318, in _run_pass
+    execute_on_device(
+  File "/home/pyptouser/yanghaoran/Desktop/pypto/python/pypto/runtime/device_runner.py", line 636, in execute_on_device
+    worker.run(cid, orch_args, cfg)
+  File "/home/pyptouser/yanghaoran/Desktop/pypto/runtime/python/simpler/worker.py", line 3819, in run
+    self._chip_worker._run_slot(state.slot_id, args, cfg)
+  File "/home/pyptouser/yanghaoran/Desktop/pypto/runtime/python/simpler/task_interface.py", line 1180, in _run_slot
+    self._impl.run(int(callable_id), args, config)
+RuntimeError: run failed with code 507000
+[npu-lock] 已释放设备 0 的锁
+=== 任务失败 (exit=1) ===
