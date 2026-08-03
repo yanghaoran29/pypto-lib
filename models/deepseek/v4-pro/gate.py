@@ -164,8 +164,7 @@ def gate(
     for t0 in pl.parallel(0, active_gate_tokens, T_TILE):
         with pl.at(
             level=pl.Level.CORE_GROUP,
-            name_hint="x_norm_quant",
-            allow_early_resolve=True,
+            name_hint="x_norm_quant", allow_early_resolve=True,
         ):
             xn_sq_col = xn_scale_buf[t0 : t0 + T_TILE, 0:1]
             for xq_b_k in pl.pipeline(0, D, QUANT_TILE, stage=2):
