@@ -30,7 +30,16 @@ therefore replaces it with `KERNEL_MAX_SEQ_LEN = 16384` — an 8k prompt plus 51
 decode steps, the budget the Flash cases already exercise. Raise that one
 constant if a case needs a longer context.
 
-The MoE path follows the DeepSeek-V4-Pro AscendC quantization boundary:
+The dense attention and MoE paths follow the DeepSeek-V4-Pro AscendC
+quantization boundary:
+
+- SWA, HCA, and CSA share an MXFP8 QKV projection and a two-stage grouped
+  MXFP8 output projection. Activations are quantized with `pl.quant_mx`, dense
+  FP8 weights carry per-32 E8M0 `MX_B_NN` scales, and both sides feed
+  `pl.matmul_mx` directly.
+- The CSA indexer projects QR with MXFP8 weights, writes its compressed index
+  cache as FP8 with one FP32 dequantization scale per row, and computes the
+  FP8 query/cache score in FP32.
 
 - Routed W1/W3/W2 checkpoint tensors stay MXFP4 on disk. The host bridge in
   [mx_utils.py](../../../models/deepseek_v4_pro/mx_utils.py) expands each E2M1
@@ -143,10 +152,13 @@ prefill_mtp     mtp_projection → prefill_attention_swa → moe → hc_head →
 `utils.py` converts the released DeepSeek-V4-Flash checkpoint (hybrid
 MXFP4 routed experts + block-FP8 attention/shared-expert linears) into the
 host-tensor ABI of the two forward drivers. Routed MXFP4 values are expanded
-losslessly to FP8E4M3 while retaining their E8M0 scales; shared-expert weights
-are converted to native MXFP8; attention's existing W8A8 tensors remain
-INT8. Per-layer tensors are stacked and EP/TP-sharded exactly like the
-fixture specs. Convert once offline, then point the drivers at the cache:
+losslessly to FP8E4M3 while retaining their E8M0 scales. Shared-expert and
+attention weights are converted to native group-32 MXFP8, including QKV, both
+output-projection stages, and the CSA indexer query projection. Per-layer
+`MX_B_NN` scales are unpacked, concatenated on their logical K-group axis, and
+repacked for the stacked forward ABI; per-layer tensors are otherwise stacked
+and EP/TP-sharded exactly like the fixture specs. Convert once offline, then
+point the drivers at the cache:
 
 ```bash
 PYTHONPATH=.:models/deepseek_v4_pro python -c 'import utils; utils.main()' \

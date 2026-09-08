@@ -6,7 +6,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-"""Host-side MXFP4/MXFP8 helpers for DeepSeek-V4-Pro MoE experts.
+"""Host-side MXFP4/MXFP8 and C8 cache helpers for DeepSeek-V4-Pro.
 
 Routed-expert checkpoint weights are packed MXFP4 and occupy the right-hand
 side of the model's Cube matmuls. PyPTO supports FP4 only through an explicit
@@ -25,6 +25,9 @@ SCALE_C0_SIZE = 2
 FP8_E4M3_MAX = 448.0
 FP4_MAX = 6.0
 TINY = 1e-20
+C8_GROUP = 64
+C8_ALIGNMENT = 128
+C8_AMAX_EPS = 1e-4
 
 # Precomputed FP4 nibble -> FP8 E4M3 codes (Issue #238 MXFP4 magnitude table).
 NIBBLE_LUT = [
@@ -155,6 +158,32 @@ def unpack_b_scale_batched(packed_codes):
     )
 
 
+def merge_mxfp8_b_scale_batches(packed_scale):
+    """Merge independently packed MX_B_NN matrices into one packed matrix.
+
+    The leading dimensions are folded into the logical K-group axis. Packed
+    bytes must be unpacked before that fold because MX_B_NN interleaves the N
+    and K-group blocks.
+    """
+    import torch
+
+    logical = unpack_b_scale_batched(packed_scale.contiguous().view(torch.uint8))
+    merged_logical = logical.reshape(-1, logical.shape[-1])
+    return pack_b_scale(merged_logical).contiguous().view(torch.float8_e8m0fnu)
+
+
+def concat_mxfp8_b_scales(packed_scales):
+    """Concatenate MX_B_NN matrices on the logical K-group axis and repack."""
+    import torch
+
+    logical_scales = [
+        unpack_b_scale_batched(scale.contiguous().view(torch.uint8))
+        for scale in packed_scales
+    ]
+    merged_logical = torch.cat(logical_scales, dim=-2)
+    return pack_b_scale_batched(merged_logical).contiguous().view(torch.float8_e8m0fnu)
+
+
 def _e8m0_codes_from_amax(amax, fp_max: float):
     """Ascend OCP shared-exponent E8M0 codes for each group maximum."""
     import torch
@@ -276,6 +305,64 @@ def host_quant_mxfp8_weight_kn(weight_nk):
     codes_kn = scale_ng.contiguous().view(torch.uint8).transpose(-2, -1).contiguous()
     scale_nn = pack_b_scale_batched(codes_kn).view(torch.float8_e8m0fnu)
     return data_kn, scale_nn
+
+
+def c8_cache_row_width(nope_dim: int, rope_dim: int) -> int:
+    """Return the AscendC C8 packed-row width in bytes."""
+    scale_bytes = math.ceil(nope_dim / C8_GROUP)
+    payload_bytes = 2 * rope_dim + nope_dim + scale_bytes
+    return math.ceil(payload_bytes / C8_ALIGNMENT) * C8_ALIGNMENT
+
+
+def pack_c8_kv(kv_bf16_or_fp32, *, nope_dim: int, rope_dim: int):
+    """Pack logical ``[..., nope+rope]`` KV rows into the AscendC C8 byte ABI."""
+    import torch
+
+    if kv_bf16_or_fp32.shape[-1] != nope_dim + rope_dim:
+        raise ValueError(
+            f"C8 KV width must be {nope_dim + rope_dim}, got {kv_bf16_or_fp32.shape[-1]}"
+        )
+    if nope_dim % C8_GROUP != 0:
+        raise ValueError(f"C8 noPE width must be divisible by {C8_GROUP}, got {nope_dim}")
+
+    *lead, _ = kv_bf16_or_fp32.shape
+    no_pe = kv_bf16_or_fp32[..., :nope_dim].float()
+    rope = kv_bf16_or_fp32[..., nope_dim:].to(torch.bfloat16).contiguous()
+    no_pe_grouped = no_pe.reshape(*lead, nope_dim // C8_GROUP, C8_GROUP)
+    amax = no_pe_grouped.abs().amax(dim=-1).clamp_min(C8_AMAX_EPS)
+    scale_codes = _e8m0_codes_from_amax(amax, FP8_E4M3_MAX)
+    scales = e8m0_codes_to_fp32(scale_codes)
+    no_pe_fp8 = (no_pe_grouped / scales.unsqueeze(-1)).to(torch.float8_e4m3fn)
+
+    rope_bytes = rope.view(torch.uint8).reshape(*lead, 2 * rope_dim)
+    no_pe_bytes = no_pe_fp8.reshape(*lead, nope_dim).contiguous().view(torch.uint8)
+    payload = torch.cat((rope_bytes, no_pe_bytes, scale_codes), dim=-1)
+    row_width = c8_cache_row_width(nope_dim, rope_dim)
+    padding = torch.zeros(*lead, row_width - payload.shape[-1], dtype=torch.uint8)
+    return torch.cat((payload, padding), dim=-1).contiguous()
+
+
+def unpack_c8_kv(packed, *, nope_dim: int, rope_dim: int):
+    """Unpack AscendC C8 rows into logical BF16 KV values and E8M0 codes."""
+    import torch
+
+    row_width = c8_cache_row_width(nope_dim, rope_dim)
+    if packed.shape[-1] != row_width:
+        raise ValueError(f"C8 row width must be {row_width}, got {packed.shape[-1]}")
+    if nope_dim % C8_GROUP != 0:
+        raise ValueError(f"C8 noPE width must be divisible by {C8_GROUP}, got {nope_dim}")
+
+    *lead, _ = packed.shape
+    raw = packed.contiguous().view(torch.uint8)
+    rope_end = 2 * rope_dim
+    no_pe_end = rope_end + nope_dim
+    scale_end = no_pe_end + nope_dim // C8_GROUP
+    rope = raw[..., :rope_end].contiguous().view(torch.bfloat16).reshape(*lead, rope_dim)
+    no_pe_fp8 = raw[..., rope_end:no_pe_end].contiguous().view(torch.float8_e4m3fn)
+    scale_codes = raw[..., no_pe_end:scale_end].contiguous()
+    scales = e8m0_codes_to_fp32(scale_codes).repeat_interleave(C8_GROUP, dim=-1)
+    no_pe = (no_pe_fp8.float() * scales).to(torch.bfloat16)
+    return torch.cat((no_pe, rope), dim=-1), scale_codes
 
 
 def gen_mxfp4_weight_kn(out: int, inn: int, dequant_std: float, *, seed: int = 0):

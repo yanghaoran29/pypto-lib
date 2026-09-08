@@ -85,6 +85,31 @@ def test_mx_scale_pack_round_trips():
     )
 
 
+def test_merge_mxfp8_b_scale_batches_repacks_the_combined_matrix():
+    logical = torch.arange(3 * 4 * 32, dtype=torch.int32).to(torch.uint8).reshape(3, 4, 32)
+    packed_batches = mx.pack_b_scale_batched(logical).view(torch.float8_e8m0fnu)
+
+    merged = mx.merge_mxfp8_b_scale_batches(packed_batches)
+
+    assert merged.shape == (12, 32)
+    assert torch.equal(mx.unpack_b_scale(merged.view(torch.uint8)), logical.reshape(12, 32))
+
+
+def test_concat_mxfp8_b_scales_preserves_rank_batches():
+    logical0 = torch.arange(2 * 4 * 32, dtype=torch.int32).to(torch.uint8).reshape(2, 4, 32)
+    logical1 = logical0 + 17
+    packed = [
+        mx.pack_b_scale_batched(logical).view(torch.float8_e8m0fnu)
+        for logical in (logical0, logical1)
+    ]
+
+    merged = mx.concat_mxfp8_b_scales(packed)
+
+    assert merged.shape == (2, 8, 32)
+    expected = torch.cat((logical0, logical1), dim=-2)
+    assert torch.equal(mx.unpack_b_scale_batched(merged.view(torch.uint8)), expected)
+
+
 def test_host_weight_quant_returns_cube_layout_and_packed_e8m0_scale():
     weight_nk = torch.linspace(-2.0, 2.0, 32 * 64).reshape(32, 64)
 
@@ -111,3 +136,47 @@ def test_host_quant_uses_ascend_ocp_shared_exponents():
     _, scale = mx.host_quant_mxfp8(x, return_e8m0=True)
 
     assert scale.view(torch.uint8).tolist() == [[0, 118, 119, 119, 120]]
+
+
+def test_host_weight_quant_supports_grouped_output_projection():
+    weight = torch.linspace(-2.0, 2.0, 3 * 32 * 64).reshape(3, 32, 64)
+
+    data, scale = mx.host_quant_mxfp8_weight_kn(weight)
+
+    assert data.shape == (3, 64, 32)
+    assert scale.shape == (3, 2, 32)
+    logical_scale = mx.unpack_b_scale_batched(scale.view(torch.uint8))
+    restored = data.float() * mx.e8m0_codes_to_fp32(logical_scale).repeat_interleave(32, dim=-2)
+    expected_data, expected_scale = mx.host_quant_mxfp8(weight, return_e8m0=True)
+    expected = expected_data.float() * mx.e8m0_codes_to_fp32(
+        expected_scale.view(torch.uint8)
+    ).repeat_interleave(32, dim=-1)
+    torch.testing.assert_close(restored, expected.transpose(-2, -1), rtol=0, atol=0)
+
+
+def test_c8_cache_matches_ascendc_640_byte_layout():
+    kv = torch.arange(2 * 512, dtype=torch.float32).reshape(2, 512) / 37.0 - 8.0
+    kv = kv.to(torch.bfloat16)
+
+    packed = mx.pack_c8_kv(kv, nope_dim=448, rope_dim=64)
+    restored, scale_codes = mx.unpack_c8_kv(packed, nope_dim=448, rope_dim=64)
+
+    assert mx.c8_cache_row_width(448, 64) == 640
+    assert packed.shape == (2, 640)
+    assert scale_codes.shape == (2, 7)
+    assert torch.equal(packed[:, :128], kv[:, 448:].contiguous().view(torch.uint8).reshape(2, 128))
+    assert torch.equal(packed[:, 576:583], scale_codes)
+    assert torch.count_nonzero(packed[:, 583:]).item() == 0
+    assert torch.equal(restored[:, 448:], kv[:, 448:])
+    torch.testing.assert_close(restored[:, :448].float(), kv[:, :448].float(), rtol=0.07, atol=0.125)
+
+
+def test_c8_cache_uses_group64_ceil_scale_and_amax_floor():
+    kv = torch.zeros(1, 512, dtype=torch.bfloat16)
+    for group, value in enumerate((0.0, 0.99, 1.0, 1.99, 2.0, 447.0, 512.0)):
+        kv[:, group * 64 : (group + 1) * 64] = value
+
+    packed = mx.pack_c8_kv(kv, nope_dim=448, rope_dim=64)
+    _, scale_codes = mx.unpack_c8_kv(packed, nope_dim=448, rope_dim=64)
+
+    assert scale_codes.tolist() == [[105, 118, 119, 119, 120, 127, 128]]
