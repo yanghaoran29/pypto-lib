@@ -16,6 +16,8 @@ Companion files: attention_swa.py (ratio=0)
 
 import pypto.language as pl
 
+from mx_utils import host_quant_mxfp8_weight_kn, merge_mxfp8_b_scale_batches
+
 from golden import mapped_pool_ratio_allclose
 
 from config import (
@@ -29,12 +31,10 @@ from config import (
     KV_CMP_MAX_BLOCKS,
     KV_ORI_MAX_BLOCKS,
     KV_ORI_TABLE_MAX_BLOCKS,
-    INT8_SCALE_MAX,
-    INT8_AMAX_EPS,
 )
 from hc_pre import hc_pre
 from hc_post import hc_post
-from qkv_proj_rope import qkv_proj_rope
+from qkv_proj_rope import MX_GROUP, T_MAX as QKV_T_MAX, qkv_proj_rope
 from rmsnorm import rms_norm
 from decode_compressor_ratio128 import compressor_ratio128
 from decode_sparse_attn_hca import sparse_attn_hca, CMP_TOPK as HCA_SPARSE_CMP_TOPK
@@ -101,10 +101,12 @@ def attention_hca(
     hc_attn_base: pl.Tensor[[MIX_HC], pl.FP32],
     # qkv_proj_rope weights
     attn_norm_w: pl.Tensor[[D], pl.BF16],
-    wq_a: pl.Tensor[[D, Q_LORA], pl.BF16],
-    wq_b: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.INT8],
-    wq_b_scale: pl.Tensor[[H * HEAD_DIM], pl.FP32],
-    wkv: pl.Tensor[[D, HEAD_DIM], pl.BF16],
+    wq_a: pl.Tensor[[D, Q_LORA], pl.FP8E4M3FN],
+    wq_a_scale: pl.Tensor[[D // MX_GROUP, Q_LORA], pl.FP8E8M0, pl.MX_B_NN],
+    wq_b: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.FP8E4M3FN],
+    wq_b_scale: pl.Tensor[[Q_LORA // MX_GROUP, H * HEAD_DIM], pl.FP8E8M0, pl.MX_B_NN],
+    wkv: pl.Tensor[[D, HEAD_DIM], pl.FP8E4M3FN],
+    wkv_scale: pl.Tensor[[D // MX_GROUP, HEAD_DIM], pl.FP8E8M0, pl.MX_B_NN],
     gamma_cq: pl.Tensor[[Q_LORA], pl.BF16],
     gamma_ckv: pl.Tensor[[HEAD_DIM], pl.BF16],
     freqs_cos: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
@@ -131,9 +133,10 @@ def attention_hca(
     # sparse_attn
     attn_sink: pl.Tensor[[H], pl.FP32],
     # o_proj (fused into sparse_attn)
-    wo_a: pl.Tensor[[O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[D, O_GROUPS * O_LORA], pl.INT8],
-    wo_b_scale: pl.Tensor[[D], pl.FP32],
+    wo_a: pl.Tensor[[O_GROUPS, O_GROUP_IN, O_LORA], pl.FP8E4M3FN],
+    wo_a_scale: pl.Tensor[[O_GROUPS * (O_GROUP_IN // MX_GROUP), O_LORA], pl.FP8E8M0, pl.MX_B_NN],
+    wo_b: pl.Tensor[[O_GROUPS * O_LORA, D], pl.FP8E4M3FN],
+    wo_b_scale: pl.Tensor[[(O_GROUPS * O_LORA) // MX_GROUP, D], pl.FP8E8M0, pl.MX_B_NN],
     x_out: pl.Tensor[[T, HC_MULT, D], pl.FP32],
 ):
     """HCA decode orchestration for compress_ratio=128."""
@@ -170,10 +173,10 @@ def attention_hca(
     late_dep = pl.system.task_dummy(deps=[rms_tid])
     q = pl.create_tensor([T, H, HEAD_DIM], dtype=pl.BF16)
     kv = pl.create_tensor([T, HEAD_DIM], dtype=pl.BF16)
-    qr = pl.create_tensor([T, Q_LORA], dtype=pl.INT8)        # unused on HCA path
-    qr_scale = pl.create_tensor([T, 1], dtype=pl.FP32)
+    qr = pl.create_tensor([QKV_T_MAX, Q_LORA], dtype=pl.FP8E4M3FN)
+    qr_scale = pl.create_tensor([1, QKV_T_MAX * (Q_LORA // MX_GROUP)], dtype=pl.FP8E8M0)
     qkv_proj_rope(
-        x_normed, wq_a, wq_b, wq_b_scale, wkv,
+        x_normed, wq_a, wq_a_scale, wq_b, wq_b_scale, wkv, wkv_scale,
         rope_cos_t, rope_sin_t, gamma_cq, gamma_ckv,
         q, kv, qr, qr_scale, late_dep,
     )
@@ -231,7 +234,7 @@ def attention_hca(
         q, kv_cache, window_swa_indices,
         cmp_kv, cmp_block_table, topk_all,
         attn_sink, rope_cos_t, rope_sin_t,
-        wo_a, wo_b, wo_b_scale, attn_out,
+        wo_a, wo_a_scale, wo_b, wo_b_scale, attn_out,
     )
 
     hc_post(attn_out, x_hc, post_t, comb_t, x_out)
@@ -245,10 +248,12 @@ def attention_hca_test(
     hc_attn_scale: pl.Tensor[[3], pl.FP32],
     hc_attn_base: pl.Tensor[[MIX_HC], pl.FP32],
     attn_norm_w: pl.Tensor[[D], pl.BF16],
-    wq_a: pl.Tensor[[D, Q_LORA], pl.BF16],
-    wq_b: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.INT8],
-    wq_b_scale: pl.Tensor[[H * HEAD_DIM], pl.FP32],
-    wkv: pl.Tensor[[D, HEAD_DIM], pl.BF16],
+    wq_a: pl.Tensor[[D, Q_LORA], pl.FP8E4M3FN],
+    wq_a_scale: pl.Tensor[[D // MX_GROUP, Q_LORA], pl.FP8E8M0, pl.MX_B_NN],
+    wq_b: pl.Tensor[[Q_LORA, H * HEAD_DIM], pl.FP8E4M3FN],
+    wq_b_scale: pl.Tensor[[Q_LORA // MX_GROUP, H * HEAD_DIM], pl.FP8E8M0, pl.MX_B_NN],
+    wkv: pl.Tensor[[D, HEAD_DIM], pl.FP8E4M3FN],
+    wkv_scale: pl.Tensor[[D // MX_GROUP, HEAD_DIM], pl.FP8E8M0, pl.MX_B_NN],
     gamma_cq: pl.Tensor[[Q_LORA], pl.BF16],
     gamma_ckv: pl.Tensor[[HEAD_DIM], pl.BF16],
     freqs_cos: pl.Tensor[[MAX_SEQ_LEN, ROPE_HEAD_DIM], pl.BF16],
@@ -270,15 +275,17 @@ def attention_hca_test(
     position_ids: pl.Tensor[[T], pl.INT32],
     kv_seq_lens: pl.Tensor[[B], pl.INT32],
     attn_sink: pl.Tensor[[H], pl.FP32],
-    wo_a: pl.Tensor[[O_GROUPS, O_LORA, O_GROUP_IN], pl.BF16],
-    wo_b: pl.Tensor[[D, O_GROUPS * O_LORA], pl.INT8],
-    wo_b_scale: pl.Tensor[[D], pl.FP32],
+    wo_a: pl.Tensor[[O_GROUPS, O_GROUP_IN, O_LORA], pl.FP8E4M3FN],
+    wo_a_scale: pl.Tensor[[O_GROUPS * (O_GROUP_IN // MX_GROUP), O_LORA], pl.FP8E8M0, pl.MX_B_NN],
+    wo_b: pl.Tensor[[O_GROUPS * O_LORA, D], pl.FP8E4M3FN],
+    wo_b_scale: pl.Tensor[[(O_GROUPS * O_LORA) // MX_GROUP, D], pl.FP8E8M0, pl.MX_B_NN],
     x_out: pl.Out[pl.Tensor[[T, HC_MULT, D], pl.FP32]],
 ):
     attention_hca(
         x_hc,
         hc_attn_fn, hc_attn_scale, hc_attn_base,
-        attn_norm_w, wq_a, wq_b, wq_b_scale, wkv, gamma_cq, gamma_ckv,
+        attn_norm_w, wq_a, wq_a_scale, wq_b, wq_b_scale, wkv, wkv_scale,
+        gamma_cq, gamma_ckv,
         freqs_cos, freqs_sin,
         cmp_wkv, cmp_wgate, cmp_ape, cmp_norm_w,
         compress_state, compress_state_block_table,
@@ -287,7 +294,7 @@ def attention_hca_test(
         cmp_slot_mapping, state_slot_mapping,
         position_ids, kv_seq_lens,
         attn_sink,
-        wo_a, wo_b, wo_b_scale,
+        wo_a, wo_a_scale, wo_b, wo_b_scale,
         x_out,
     )
     return kv_cache, cmp_kv, compress_state, x_out
@@ -336,18 +343,20 @@ def golden_attention_hca(tensors):
         rope_cos_T[t] = freqs_cos[pos]
         rope_sin_T[t] = freqs_sin[pos]
 
-    # q + win kv (W8A8 q_proj)
+    # q + win kv (MXFP8 q_proj)
     q = torch.zeros(T, H, HEAD_DIM, dtype=torch.bfloat16)
     kv = torch.zeros(T, HEAD_DIM, dtype=torch.bfloat16)
-    qr = torch.zeros(T, Q_LORA, dtype=torch.int8)
-    qr_scale = torch.zeros(T, 1, dtype=torch.float32)
+    qr = torch.zeros(QKV_T_MAX, Q_LORA, dtype=torch.float8_e4m3fn)
+    qr_scale = torch.zeros(1, QKV_T_MAX * (Q_LORA // MX_GROUP), dtype=torch.float8_e8m0fnu)
     x_normed = golden_rms_norm(x_mixed, tensors["attn_norm_w"])
     golden_qkv_proj_rope({
         "x": x_normed,
         "wq_a": tensors["wq_a"],
+        "wq_a_scale": tensors["wq_a_scale"],
         "wq_b": tensors["wq_b"],
         "wq_b_scale": tensors["wq_b_scale"],
         "wkv": tensors["wkv"],
+        "wkv_scale": tensors["wkv_scale"],
         "rope_cos": rope_cos_T,
         "rope_sin": rope_sin_T,
         "gamma_cq": tensors["gamma_cq"],
@@ -423,6 +432,7 @@ def golden_attention_hca(tensors):
         "freqs_cos": rope_cos_T,
         "freqs_sin": rope_sin_T,
         "wo_a": tensors["wo_a"],
+        "wo_a_scale": tensors["wo_a_scale"],
         "wo_b": tensors["wo_b"],
         "wo_b_scale": tensors["wo_b_scale"],
         "attn_out": attn_out,
@@ -459,29 +469,11 @@ def build_tensor_specs(start_pos=None):
 
     shared_freqs_cos, shared_freqs_sin = build_deepseek_v4_rope_tables(M, COMPRESS_RATIO, dtype=torch.bfloat16)
 
-    def quant_w_per_output_channel(w):
-        amax = w.float().abs().amax(dim=0).clamp_min(INT8_AMAX_EPS)
-        scale_quant = INT8_SCALE_MAX / amax
-        scaled = w.float() * scale_quant.view(1, H * HEAD_DIM)
-        w_i32 = torch.round(scaled).to(torch.int32)
-        w_i32 = torch.clamp(w_i32, -int(INT8_SCALE_MAX), int(INT8_SCALE_MAX))
-        w_i8 = w_i32.to(torch.float16).to(torch.int8)
-        return w_i8, (1.0 / scale_quant).float()
-
-    def quant_w_per_row(w):
-        amax = w.float().abs().amax(dim=-1).clamp_min(INT8_AMAX_EPS)
-        scale_quant = INT8_SCALE_MAX / amax
-        scaled = w.float() * scale_quant.unsqueeze(-1)
-        w_i32 = torch.round(scaled).to(torch.int32)
-        w_i32 = torch.clamp(w_i32, -int(INT8_SCALE_MAX), int(INT8_SCALE_MAX))
-        w_i8 = w_i32.to(torch.float16).to(torch.int8)
-        return w_i8, (1.0 / scale_quant).float()
-
     def init_x_hc():
         return torch.empty(T, HC_MULT, D).uniform_(-1, 1)
     # Real layer-9 (HCA, ratio-128) hc_attn scale/base (fn synthetic at real magnitude). A
     # synthetic scale=0.5/base=0 leaves hc_pre post~=1 + near-uniform comb, cancelling attn_out
-    # and the hc residual to near-zero in x_out where W8A8 noise blows up the relative tail.
+    # and the hc residual to near-zero in x_out where quantization noise amplifies the relative tail.
     def init_hc_attn_fn():
         return torch.randn(MIX_HC, HC_DIM) * 0.0495
     def init_hc_attn_scale():
@@ -604,10 +596,12 @@ def build_tensor_specs(start_pos=None):
     def init_wo_b():
         return torch.randn(D, O_GROUPS * O_LORA) / (O_GROUPS * O_LORA) ** 0.5
 
-    wq_b_bf16 = init_wq_b().to(torch.bfloat16)
-    wq_b_i8, wq_b_scale = quant_w_per_output_channel(wq_b_bf16)
-    wo_b_bf16 = init_wo_b().to(torch.bfloat16)
-    wo_b_i8, wo_b_scale = quant_w_per_row(wo_b_bf16)
+    wq_a, wq_a_scale = host_quant_mxfp8_weight_kn(init_wq_a().transpose(0, 1))
+    wq_b, wq_b_scale = host_quant_mxfp8_weight_kn(init_wq_b().transpose(0, 1))
+    wkv, wkv_scale = host_quant_mxfp8_weight_kn(init_wkv().transpose(0, 1))
+    wo_a, wo_a_scale = host_quant_mxfp8_weight_kn(init_wo_a())
+    wo_a_scale = merge_mxfp8_b_scale_batches(wo_a_scale)
+    wo_b, wo_b_scale = host_quant_mxfp8_weight_kn(init_wo_b())
 
     return [
         TensorSpec("x_hc", [T, HC_MULT, D], torch.float32, init_value=init_x_hc),
@@ -615,10 +609,12 @@ def build_tensor_specs(start_pos=None):
         TensorSpec("hc_attn_scale", [3], torch.float32, init_value=init_hc_attn_scale),
         TensorSpec("hc_attn_base", [MIX_HC], torch.float32, init_value=init_hc_attn_base),
         TensorSpec("attn_norm_w", [D], torch.bfloat16, init_value=init_attn_norm_w),
-        TensorSpec("wq_a", [D, Q_LORA], torch.bfloat16, init_value=init_wq_a),
-        TensorSpec("wq_b", [Q_LORA, H * HEAD_DIM], torch.int8, init_value=lambda: wq_b_i8),
-        TensorSpec("wq_b_scale", [H * HEAD_DIM], torch.float32, init_value=lambda: wq_b_scale),
-        TensorSpec("wkv", [D, HEAD_DIM], torch.bfloat16, init_value=init_wkv),
+        TensorSpec("wq_a", [D, Q_LORA], torch.float8_e4m3fn, init_value=lambda: wq_a),
+        TensorSpec("wq_a_scale", [D // MX_GROUP, Q_LORA], torch.float8_e8m0fnu, init_value=lambda: wq_a_scale),
+        TensorSpec("wq_b", [Q_LORA, H * HEAD_DIM], torch.float8_e4m3fn, init_value=lambda: wq_b),
+        TensorSpec("wq_b_scale", [Q_LORA // MX_GROUP, H * HEAD_DIM], torch.float8_e8m0fnu, init_value=lambda: wq_b_scale),
+        TensorSpec("wkv", [D, HEAD_DIM], torch.float8_e4m3fn, init_value=lambda: wkv),
+        TensorSpec("wkv_scale", [D // MX_GROUP, HEAD_DIM], torch.float8_e8m0fnu, init_value=lambda: wkv_scale),
         TensorSpec("gamma_cq", [Q_LORA], torch.bfloat16, init_value=init_gamma_cq),
         TensorSpec("gamma_ckv", [HEAD_DIM], torch.bfloat16, init_value=init_gamma_ckv),
         TensorSpec("freqs_cos", [MAX_SEQ_LEN, ROPE_HEAD_DIM], torch.bfloat16, init_value=init_freqs_cos),
@@ -640,9 +636,20 @@ def build_tensor_specs(start_pos=None):
         TensorSpec("position_ids", [T], torch.int32, init_value=init_position_ids),
         TensorSpec("kv_seq_lens", [B], torch.int32, init_value=init_kv_seq_lens),
         TensorSpec("attn_sink", [H], torch.float32, init_value=init_attn_sink),
-        TensorSpec("wo_a", [O_GROUPS, O_LORA, O_GROUP_IN], torch.bfloat16, init_value=init_wo_a),
-        TensorSpec("wo_b", [D, O_GROUPS * O_LORA], torch.int8, init_value=lambda: wo_b_i8),
-        TensorSpec("wo_b_scale", [D], torch.float32, init_value=lambda: wo_b_scale),
+        TensorSpec("wo_a", [O_GROUPS, O_GROUP_IN, O_LORA], torch.float8_e4m3fn, init_value=lambda: wo_a),
+        TensorSpec(
+            "wo_a_scale",
+            [O_GROUPS * (O_GROUP_IN // MX_GROUP), O_LORA],
+            torch.float8_e8m0fnu,
+            init_value=lambda: wo_a_scale,
+        ),
+        TensorSpec("wo_b", [O_GROUPS * O_LORA, D], torch.float8_e4m3fn, init_value=lambda: wo_b),
+        TensorSpec(
+            "wo_b_scale",
+            [(O_GROUPS * O_LORA) // MX_GROUP, D],
+            torch.float8_e8m0fnu,
+            init_value=lambda: wo_b_scale,
+        ),
         TensorSpec("x_out", [T, HC_MULT, D], torch.float32),
     ]
 

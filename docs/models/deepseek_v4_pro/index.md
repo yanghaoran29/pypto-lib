@@ -30,11 +30,36 @@ therefore replaces it with `KERNEL_MAX_SEQ_LEN = 16384` — an 8k prompt plus 51
 decode steps, the budget the Flash cases already exercise. Raise that one
 constant if a case needs a longer context.
 
-Native MXFP8-MXFP4 is not implemented yet. The tracked kernels run an INT8
-stand-in with the same tensor split as
-[V4-Flash](../deepseek_v4_flash_mtp/index.md#what-is-quantized): `gen_routed_weight` in
-[expert_routed.py](../../../models/deepseek_v4_pro/expert_routed.py) re-quantizes
-off the MXFP4 grid into INT8 rather than feeding the cube MXFP4 weights.
+The dense attention and MoE paths follow the DeepSeek-V4-Pro AscendC
+quantization boundary:
+
+- SWA, HCA, and CSA share an MXFP8 QKV projection and a two-stage grouped
+  MXFP8 output projection. Activations are quantized with `pl.quant_mx`, dense
+  FP8 weights carry per-32 E8M0 `MX_B_NN` scales, and both sides feed
+  `pl.matmul_mx` directly.
+- The CSA indexer projects QR with MXFP8 weights, writes its compressed index
+  cache as FP8 with one FP32 dequantization scale per row, and computes the
+  FP8 query/cache score in FP32.
+
+- Routed W1/W3/W2 checkpoint tensors stay MXFP4 on disk. The host bridge in
+  [mx_utils.py](../../../models/deepseek_v4_pro/mx_utils.py) expands each E2M1
+  nibble exactly to its FP8E4M3 value, preserves the original per-32 E8M0
+  scale, and packs it as ``MX_B_NN`` before Cube multiplication.
+- Shared W1/W3/W2 use native MXFP8 data and per-32 E8M0 scales.
+- [gate.py](../../../models/deepseek_v4_pro/gate.py) applies ``pl.quant_mx``
+  to the normalized MoE input. [moe.py](../../../models/deepseek_v4_pro/moe.py)
+  dispatches both the FP8 data and its scale, and both expert kernels apply
+  ``pl.quant_mx`` again after SwiGLU before W2.
+
+The expert kernels pass ordinary ``pl.load`` results directly to
+``pl.matmul_mx``. PyPTO infers the data and scale staging from the four operand
+positions, including ``LeftScale`` and ``RightScale`` placement. Quantized
+activations remain GM-backed where multiple expert or W2 output blocks reuse
+them; direct vector-to-cube transport would otherwise repeat quantization or
+reduce output-block parallelism.
+
+This path does not use an NVIDIA ``scale_alg`` setting. Scale generation and
+physical layout conversion are expressed directly through PyPTO's MX APIs.
 
 ### Model shape and layer schedule
 
@@ -126,10 +151,14 @@ prefill_mtp     mtp_projection → prefill_attention_swa → moe → hc_head →
 
 `utils.py` converts the released DeepSeek-V4-Flash checkpoint (hybrid
 MXFP4 routed experts + block-FP8 attention/shared-expert linears) into the
-host-tensor ABI of the two forward drivers: FP4/FP8 tensors are dequantized
-and re-quantized to the kernels' INT8 + per-output-channel FP32-scale form,
-per-layer tensors are stacked and EP/TP-sharded exactly like the fixture
-specs. Convert once offline, then point the drivers at the cache:
+host-tensor ABI of the two forward drivers. Routed MXFP4 values are expanded
+losslessly to FP8E4M3 while retaining their E8M0 scales. Shared-expert and
+attention weights are converted to native group-32 MXFP8, including QKV, both
+output-projection stages, and the CSA indexer query projection. Per-layer
+`MX_B_NN` scales are unpacked, concatenated on their logical K-group axis, and
+repacked for the stacked forward ABI; per-layer tensors are otherwise stacked
+and EP/TP-sharded exactly like the fixture specs. Convert once offline, then
+point the drivers at the cache:
 
 ```bash
 PYTHONPATH=.:models/deepseek_v4_pro python -c 'import utils; utils.main()' \

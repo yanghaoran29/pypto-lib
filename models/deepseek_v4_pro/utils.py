@@ -55,13 +55,12 @@ Converts the HuggingFace-style hybrid MXFP4-MXFP8 checkpoint (43 layers,
 256 routed experts, ``expert_dtype=fp4`` + block-FP8 attention linears) into
 the exact host-tensor ABI ``prefill_fwd.py`` / ``decode_fwd.py`` consume:
 
-- FP8 e4m3 weights (128x128-block UE8M0 scales) are dequantized, then either
-  kept BF16 (``wq_a``, ``wkv``, ``wo_a``) or re-quantized to the kernels'
-  W8A8 form: symmetric INT8 with a per-output-channel FP32 scale (amax/127,
-  the same round -> clamp +-127 -> fp16 -> int8 chain as the fixtures).
+- FP8 e4m3 weights (128x128-block UE8M0 scales) are dequantized, then
+  quantized per input group to the attention and shared-expert kernels'
+  native MXFP8 Cube ABI.
 - FP4 e2m1 routed-expert weights (packed two-per-byte, per-32-group UE8M0
-  scales along the input dim) are unpacked, dequantized and re-quantized to
-  the same INT8 + per-output-channel FP32 scale form.
+  scales along the input dim) are expanded exactly to FP8E4M3 values. Their
+  original E8M0 scales are preserved and packed for ``MX_B_NN``.
 - Per-layer tensors are stacked along dim 1 exactly like
   ``_make_stacked_spec`` (FWD stacks by model layer id 0..42; CSA/HCA stacks
   by kind order = ascending layer id of that compress-ratio kind), sharded
@@ -112,8 +111,6 @@ from config import (
     ACTIVE as M,
     ACTIVE as MODEL_CONFIG,
     ACTIVE_BASE,
-    INT8_AMAX_EPS,
-    INT8_SCALE_MAX,
 )
 from prefill_attention_swa import golden_prefill_attention_swa
 from prefill_attention_hca import HCA_STATE_BLOCK_SIZE, golden_prefill_attention_hca
@@ -128,6 +125,14 @@ from lm_head import golden_lm_head_all_ranks
 from rmsnorm import golden_rms_norm
 
 from golden import ratio_allclose
+from mx_utils import (
+    concat_mxfp8_b_scales,
+    host_quant_mxfp8_weight_kn,
+    merge_mxfp8_b_scale_batches,
+    mxfp4_to_mxfp8_weight_kn,
+    pack_b_scale_batched,
+    unpack_b_scale_batched,
+)
 
 # ===========================================================================
 # Real DeepSeek-V4-Flash checkpoint loader
@@ -220,7 +225,7 @@ class FlashCheckpoint:
 
 
 # ---------------------------------------------------------------------------
-# Dequantization (checkpoint grids) and requantization (kernel W8A8 ABI).
+# Dequantization (checkpoint grids) and conversion to kernel weight ABIs.
 # ---------------------------------------------------------------------------
 def _e8m0_to_fp32(scale_u8: torch.Tensor) -> torch.Tensor:
     """Decode UE8M0 bytes (unsigned power-of-two exponents) to fp32: 2^(x-127)."""
@@ -251,21 +256,6 @@ def dequant_fp4(weight_packed: torch.Tensor, scale_u8: torch.Tensor) -> torch.Te
     return values * scale
 
 
-def quant_int8_per_out_channel(w: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Symmetric per-output-channel INT8 quant of an ``[..., out, in]`` weight.
-
-    Identical chain to the fixture helpers (``quant_w_per_output_channel`` /
-    ``quant_w_per_row``): amax over the input dim clamped to INT8_AMAX_EPS,
-    round -> int32 -> clamp +-127 -> fp16 -> int8, FP32 dequant scale amax/127.
-    """
-    w = w.to(torch.float32)
-    amax = w.abs().amax(dim=-1).clamp_min(INT8_AMAX_EPS)
-    scale_quant = INT8_SCALE_MAX / amax
-    w_i32 = torch.round(w * scale_quant.unsqueeze(-1)).to(torch.int32)
-    w_i32 = torch.clamp(w_i32, -int(INT8_SCALE_MAX), int(INT8_SCALE_MAX))
-    return w_i32.to(torch.float16).to(torch.int8), (1.0 / scale_quant).float()
-
-
 # ---------------------------------------------------------------------------
 # Spec-name converters: checkpoint tensors -> per-rank-stacked host tensors.
 # ---------------------------------------------------------------------------
@@ -276,8 +266,8 @@ def _replicate(x: torch.Tensor, n_ranks: int) -> torch.Tensor:
 class FlashWeightConverter:
     """Converts spec-named host tensors from a :class:`FlashCheckpoint`.
 
-    Weight/scale pairs (``wq_b``/``wq_b_scale``, routed and shared experts,
-    ...) are produced by one dequant+requant pass: converting the weight
+    Weight/scale pairs (attention linears, routed and shared experts) are
+    produced by one dequant+requant pass: converting the weight
     stashes its scale, so requesting the scale right after (the spec order of
     the drivers and of :data:`REAL_WEIGHT_NAMES`) is free.
     """
@@ -310,34 +300,49 @@ class FlashWeightConverter:
     def _raw(self, name: str) -> torch.Tensor:
         return self.ckpt.get(name).clone()
 
-    def _stacked_pair(
-        self, scale_name: str, layers: list[int],
+    def _stacked_mx_pair(
+        self,
+        scale_name: str,
+        layers: list[int],
         pair_of_layer: Callable[[int], tuple[torch.Tensor, torch.Tensor]],
     ) -> torch.Tensor:
-        """Convert a per-layer (weight, scale) pair; stash the stacked scale."""
-        weights, scales = zip(*[pair_of_layer(layer) for layer in layers])
-        self._stash[scale_name] = _replicate(torch.cat(scales, dim=0), self.ep)
+        """Stack independently packed MX_B_NN matrices as contiguous layer blocks."""
+        weights, packed_scales = zip(*[pair_of_layer(layer) for layer in layers])
+        self._stash[scale_name] = _replicate(concat_mxfp8_b_scales(packed_scales), self.ep)
         return _replicate(torch.cat(weights, dim=0), self.ep)
 
     # ---- attention linears ----------------------------------------------
+    def _attention_mx(self, prefix: str) -> tuple[torch.Tensor, torch.Tensor]:
+        return host_quant_mxfp8_weight_kn(self._deq_fp8(prefix))
+
+    def _wq_a(self, layer: int) -> tuple[torch.Tensor, torch.Tensor]:
+        return self._attention_mx(f"layers.{layer}.attn.wq_a")
+
     def _wq_b(self, layer: int) -> tuple[torch.Tensor, torch.Tensor]:
-        w_i8, scale = quant_int8_per_out_channel(self._deq_fp8(f"layers.{layer}.attn.wq_b"))
-        return w_i8.t().contiguous(), scale  # kernel layout [Q_LORA, H*HEAD_DIM]
+        return self._attention_mx(f"layers.{layer}.attn.wq_b")
+
+    def _wkv(self, layer: int) -> tuple[torch.Tensor, torch.Tensor]:
+        return self._attention_mx(f"layers.{layer}.attn.wkv")
+
+    def _wo_a(self, layer: int) -> tuple[torch.Tensor, torch.Tensor]:
+        weight_nk = self._deq_fp8(f"layers.{layer}.attn.wo_a")
+        weight_nk = weight_nk.view(O_GROUPS, O_LORA, -1)
+        weight_mx, weight_scale = host_quant_mxfp8_weight_kn(weight_nk)
+        return weight_mx, merge_mxfp8_b_scale_batches(weight_scale)
 
     def _wo_b(self, layer: int) -> tuple[torch.Tensor, torch.Tensor]:
-        return quant_int8_per_out_channel(self._deq_fp8(f"layers.{layer}.attn.wo_b"))  # [D, O_GROUPS*O_LORA]
+        return self._attention_mx(f"layers.{layer}.attn.wo_b")
 
     def _idx_wq_b(self, layer: int) -> tuple[torch.Tensor, torch.Tensor]:
-        w = self._deq_fp8(f"layers.{layer}.attn.indexer.wq_b")
-        w_i8, scale = quant_int8_per_out_channel(w)
-        return w_i8.t().contiguous(), scale  # kernel layout [Q_LORA, IDX_N_HEADS*IDX_HEAD_DIM]
+        return self._attention_mx(f"layers.{layer}.attn.indexer.wq_b")
 
     def _shared(self, layer: int, which: str) -> tuple[torch.Tensor, torch.Tensor]:
-        return quant_int8_per_out_channel(self._deq_fp8(f"layers.{layer}.ffn.shared_experts.{which}"))
+        weight_nk = self._deq_fp8(f"layers.{layer}.ffn.shared_experts.{which}")
+        return host_quant_mxfp8_weight_kn(weight_nk)
 
     # ---- routed experts (EP-sharded) ------------------------------------
     def _routed_layer(self, layer: int, which: str) -> tuple[torch.Tensor, torch.Tensor]:
-        """One layer's EP-sharded INT8 experts: ``([ep, n_local, out, in], [ep, n_local, out])``."""
+        """One layer's EP-sharded MXFP4-to-MXFP8 expert payloads."""
         weights, scales = [], []
         for rank in range(self.ep):
             experts = range(rank * self.n_local, (rank + 1) * self.n_local)
@@ -347,20 +352,30 @@ class FlashWeightConverter:
             scales_u8 = torch.stack(
                 [self.ckpt.get(f"layers.{layer}.ffn.experts.{e}.{which}.scale") for e in experts]
             )
-            w_i8, w_scale = quant_int8_per_out_channel(dequant_fp4(packed, scales_u8))
-            weights.append(w_i8)
+            weight_mx, w_scale = mxfp4_to_mxfp8_weight_kn(packed, scales_u8)
+            weights.append(weight_mx)
             scales.append(w_scale)
         return torch.stack(weights), torch.stack(scales)
 
     def _routed(self, scale_name: str, which: str) -> torch.Tensor:
-        out_dim, in_dim = (MOE_INTER, D) if which in ("w1", "w3") else (D, MOE_INTER)
-        weight = torch.empty([self.ep, NUM_LAYERS * self.n_local, out_dim, in_dim], dtype=torch.int8)
-        scale = torch.empty([self.ep, NUM_LAYERS * self.n_local, out_dim], dtype=torch.float32)
+        k_dim, n_dim = (D, MOE_INTER) if which in ("w1", "w3") else (MOE_INTER, D)
+        groups = k_dim // FP4_GROUP
+        weight = torch.empty(
+            [self.ep, NUM_LAYERS * self.n_local, k_dim, n_dim], dtype=torch.float8_e4m3fn
+        )
+        scale = torch.empty(
+            [self.ep, NUM_LAYERS * self.n_local * groups, n_dim], dtype=torch.float8_e8m0fnu
+        )
         for layer in range(NUM_LAYERS):
             block = slice(layer * self.n_local, (layer + 1) * self.n_local)
-            w_i8, w_scale = self._routed_layer(layer, which)
-            weight[:, block] = w_i8
-            scale[:, block] = w_scale
+            scale_block = slice(layer * self.n_local * groups, (layer + 1) * self.n_local * groups)
+            weight_mx, w_scale = self._routed_layer(layer, which)
+            weight[:, block] = weight_mx
+            logical_scale = unpack_b_scale_batched(w_scale.contiguous().view(torch.uint8))
+            layer_scale = pack_b_scale_batched(
+                logical_scale.reshape(self.ep, self.n_local * groups, n_dim)
+            ).view(torch.float8_e8m0fnu)
+            scale[:, scale_block] = layer_scale
         self._stash[scale_name] = scale
         return weight
 
@@ -405,17 +420,18 @@ class FlashWeightConverter:
                 return rep(fwd(lambda l: self._raw(f"layers.{l}.{name}")), self.ep)
             case "attn_norm_w":
                 return rep(fwd(lambda l: self._raw(f"layers.{l}.attn_norm.weight")), self.ep)
-            case "wq_a":
-                return rep(fwd(
-                    lambda l: self._deq_fp8(f"layers.{l}.attn.wq_a").t().contiguous().to(torch.bfloat16)), self.ep)
-            case "wkv":
-                return rep(fwd(
-                    lambda l: self._deq_fp8(f"layers.{l}.attn.wkv").t().contiguous().to(torch.bfloat16)), self.ep)
-            case "wq_b":
-                return self._stacked_pair("wq_b_scale", list(range(NUM_LAYERS)), self._wq_b)
-            case "wo_b":
-                return self._stacked_pair("wo_b_scale", list(range(NUM_LAYERS)), self._wo_b)
-            case "wq_b_scale" | "wo_b_scale":
+            case "wq_a" | "wq_b" | "wkv" | "wo_a" | "wo_b":
+                pair_of_layer = {
+                    "wq_a": self._wq_a,
+                    "wq_b": self._wq_b,
+                    "wkv": self._wkv,
+                    "wo_a": self._wo_a,
+                    "wo_b": self._wo_b,
+                }[name]
+                return self._stacked_mx_pair(
+                    f"{name}_scale", list(range(NUM_LAYERS)), pair_of_layer
+                )
+            case "wq_a_scale" | "wq_b_scale" | "wkv_scale" | "wo_a_scale" | "wo_b_scale":
                 self.convert(name.removesuffix("_scale"))  # populates the stash
                 return self._stash.pop(name)
             case "gamma_cq":
@@ -424,10 +440,6 @@ class FlashWeightConverter:
                 return rep(fwd(lambda l: self._raw(f"layers.{l}.attn.kv_norm.weight")), self.ep)
             case "attn_sink":
                 return rep(fwd(lambda l: self._raw(f"layers.{l}.attn.attn_sink")), self.ep)
-            case "wo_a":
-                return rep(fwd(
-                    lambda l: self._deq_fp8(f"layers.{l}.attn.wo_a").to(torch.bfloat16).view(O_GROUPS, O_LORA, -1)),
-                    self.ep)
             # ---- per-FWD-layer stacked MoE weights ----
             case "norm_w":
                 return rep(fwd(lambda l: self._raw(f"layers.{l}.ffn_norm.weight")), self.ep)
@@ -444,7 +456,7 @@ class FlashWeightConverter:
                 return self._stash.pop(name)
             case "shared_w1" | "shared_w2" | "shared_w3":
                 which = name.removeprefix("shared_")
-                return self._stacked_pair(
+                return self._stacked_mx_pair(
                     f"{name}_scale", list(range(NUM_LAYERS)), lambda l: self._shared(l, which))
             case "shared_w1_scale" | "shared_w2_scale" | "shared_w3_scale":
                 self.convert(name.removesuffix("_scale"))
@@ -458,7 +470,7 @@ class FlashWeightConverter:
             case "csa_cmp_norm_w":
                 return rep(csa(lambda l: self._raw(f"layers.{l}.attn.compressor.norm.weight")), self.ep)
             case "csa_idx_wq_b":
-                return self._stacked_pair("csa_idx_wq_b_scale", CSA_LAYERS, self._idx_wq_b)
+                return self._stacked_mx_pair("csa_idx_wq_b_scale", CSA_LAYERS, self._idx_wq_b)
             case "csa_idx_wq_b_scale":
                 self.convert("csa_idx_wq_b")
                 return self._stash.pop(name)
@@ -516,19 +528,26 @@ class FlashWeightConverter:
         out["gamma_cq"] = rep(self._raw(f"layers.{lyr}.attn.q_norm.weight"))
         out["gamma_ckv"] = rep(self._raw(f"layers.{lyr}.attn.kv_norm.weight"))
         out["attn_sink"] = rep(self._raw(f"layers.{lyr}.attn.attn_sink"))
-        out["wq_a"] = rep(self._deq_fp8(f"layers.{lyr}.attn.wq_a").t().contiguous().to(torch.bfloat16))
-        out["wkv"] = rep(self._deq_fp8(f"layers.{lyr}.attn.wkv").t().contiguous().to(torch.bfloat16))
-        out["wo_a"] = rep(self._deq_fp8(f"layers.{lyr}.attn.wo_a").to(torch.bfloat16).view(O_GROUPS, O_LORA, -1))
-        w, s = self._wq_b(lyr)
-        out["wq_b"], out["wq_b_scale"] = rep(w), rep(s)
-        w, s = self._wo_b(lyr)
-        out["wo_b"], out["wo_b_scale"] = rep(w), rep(s)
+        for name, pair_of_layer in (
+            ("wq_a", self._wq_a),
+            ("wq_b", self._wq_b),
+            ("wkv", self._wkv),
+            ("wo_a", self._wo_a),
+            ("wo_b", self._wo_b),
+        ):
+            weight_mx, weight_scale = pair_of_layer(lyr)
+            out[name], out[f"{name}_scale"] = rep(weight_mx), rep(weight_scale)
         out["gate_w"] = rep(self._gate_w(lyr))
         out["gate_bias"] = rep(self._gate_bias(lyr))
         out["tid2eid"] = rep(self._tid2eid(lyr))
         for which in ("w1", "w2", "w3"):
-            w_i8, w_scale = self._routed_layer(lyr, which)
-            out[f"routed_{which}"], out[f"routed_{which}_scale"] = w_i8, w_scale
+            weight_mx, w_scale = self._routed_layer(lyr, which)
+            out[f"routed_{which}"] = weight_mx
+            logical_scale = unpack_b_scale_batched(w_scale.contiguous().view(torch.uint8))
+            flat_scale = logical_scale.flatten(1, 2)
+            out[f"routed_{which}_scale"] = pack_b_scale_batched(flat_scale).view(
+                torch.float8_e8m0fnu
+            )
             w, s = self._shared(lyr, which)
             out[f"shared_{which}"], out[f"shared_{which}_scale"] = rep(w), rep(s)
         if lyr in CSA_LAYERS:
@@ -584,8 +603,9 @@ def apply_real_layer_weights(specs: list, ckpt_dir: str | Path, *, layer_id: int
 # scale conversion hits the converter's stash.
 REAL_WEIGHT_NAMES = (
     "hc_attn_fn", "hc_attn_scale", "hc_attn_base", "attn_norm_w",
-    "wq_a", "wq_b", "wq_b_scale", "wkv", "gamma_cq", "gamma_ckv",
-    "attn_sink", "wo_a", "wo_b", "wo_b_scale",
+    "wq_a", "wq_a_scale", "wq_b", "wq_b_scale", "wkv", "wkv_scale",
+    "gamma_cq", "gamma_ckv", "attn_sink",
+    "wo_a", "wo_a_scale", "wo_b", "wo_b_scale",
     "hc_ffn_fn", "hc_ffn_scale", "hc_ffn_base", "norm_w",
     "gate_w", "gate_bias", "tid2eid",
     "routed_w1", "routed_w1_scale", "routed_w3", "routed_w3_scale",
@@ -774,9 +794,11 @@ def _base_attention_views(tensors, rank, layer, x_hc, x_out, num_tokens):
         "hc_attn_base": fwd("hc_attn_base"),
         "attn_norm_w": fwd("attn_norm_w"),
         "wq_a": fwd("wq_a"),
+        "wq_a_scale": fwd("wq_a_scale"),
         "wq_b": fwd("wq_b"),
         "wq_b_scale": fwd("wq_b_scale"),
         "wkv": fwd("wkv"),
+        "wkv_scale": fwd("wkv_scale"),
         "gamma_cq": fwd("gamma_cq"),
         "gamma_ckv": fwd("gamma_ckv"),
         "freqs_cos": _rope_profile_for_kind(tensors["freqs_cos"][rank], kind),
@@ -786,6 +808,7 @@ def _base_attention_views(tensors, rank, layer, x_hc, x_out, num_tokens):
         "ori_slot_mapping": tensors["ori_slot_mapping"][rank],
         "attn_sink": fwd("attn_sink"),
         "wo_a": fwd("wo_a"),
+        "wo_a_scale": fwd("wo_a_scale"),
         "wo_b": fwd("wo_b"),
         "wo_b_scale": fwd("wo_b_scale"),
         "x_out": x_out,
@@ -1601,7 +1624,7 @@ def build_validate_compare_fn(num_tokens):
             rtol=2e-2,
             max_error_ratio=0.01,
         ),
-        # INT8 index cache: allow one quantization step on a bounded fraction.
+        # FP8 index cache: allow one quantization step on a bounded fraction.
         "idx_kv_cache": stacked_pool(
             ("csa_idx_slot_mapping",) * CSA_NUM_LAYERS,
             layer_labels=csa_layer_labels,
