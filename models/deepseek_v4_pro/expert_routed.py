@@ -322,38 +322,42 @@ def expert_routed(
                                 )
                             up_tile_fp32 = pl.store(up_acc, [0, n0], up_tile_fp32)
 
-                    h_tile_fp32 = pl.create_tensor([RECV_TILE, MOE_INTER], dtype=pl.FP32)
+                    h_tile_mx = h_mx[flat_t0 : flat_t0 + RECV_TILE]
+                    h_tile_scale_backing = h_scale_backing[
+                        :, flat_t0 * H_SCALE : (flat_t0 + RECV_TILE) * H_SCALE
+                    ]
                     with pl.spmd(
                         MOE_INTER // (ACT_GATE_INNER * ACT_INTER_TILE),
-                        name_hint="exp_gate_up_act",
+                        name_hint="exp_gate_up_act_quant",
                     ):
                         ab_idx = pl.tile.get_block_idx()
                         a_base = ab_idx * (ACT_GATE_INNER * ACT_INTER_TILE)
+                        h_fp32 = pl.tile.full([RECV_TILE, QUANT_TILE], dtype=pl.FP32, value=0.0)
                         for ag in pl.pipeline(ACT_GATE_INNER, stage=2):
                             a0 = a_base + ag * ACT_INTER_TILE
-                            gate_2d = gate_tile_fp32[:, a0 : a0 + ACT_INTER_TILE]
-                            up_2d = up_tile_fp32[:, a0 : a0 + ACT_INTER_TILE]
+                            h_a0 = ag * ACT_INTER_TILE
+                            gate_2d = pl.load(
+                                gate_tile_fp32,
+                                [0, a0],
+                                [RECV_TILE, ACT_INTER_TILE],
+                            )
+                            up_2d = pl.load(
+                                up_tile_fp32,
+                                [0, a0],
+                                [RECV_TILE, ACT_INTER_TILE],
+                            )
                             if SWIGLU_LIMIT > 0.0:
                                 gate_2d = pl.minimum(gate_2d, SWIGLU_LIMIT)
                                 up_2d = pl.maximum(pl.minimum(up_2d, SWIGLU_LIMIT), -SWIGLU_LIMIT)
                             sigmoid = pl.recip(pl.add(pl.exp(pl.neg(gate_2d)), 1.0))
                             silu = pl.mul(gate_2d, sigmoid)
                             gated = pl.mul(silu, up_2d)
-                            gated_valid = pl.set_validshape(gated, valid_rows, ACT_INTER_TILE)
-                            h_tile_fp32[:, a0 : a0 + ACT_INTER_TILE] = pl.fillpad(
-                                gated_valid, pad_value=pl.PadValue.zero
-                            )
-
-                    h_tile_mx = h_mx[flat_t0 : flat_t0 + RECV_TILE]
-                    h_tile_scale_backing = h_scale_backing[
-                        :, flat_t0 * H_SCALE : (flat_t0 + RECV_TILE) * H_SCALE
-                    ]
-                    for q_idx in pl.spmd(MOE_INTER // QUANT_TILE, name_hint="exp_h_mx_quant"):
-                        k0 = q_idx * QUANT_TILE
-                        h_fp32 = pl.load(h_tile_fp32, [0, k0], [RECV_TILE, QUANT_TILE])
-                        h_quant, h_scale = pl.quant_mx(h_fp32, group_axis=1)
-                        h_tile_mx = pl.store(h_quant, [0, k0], h_tile_mx)
-                        scale_offset = q_idx * RECV_TILE * (QUANT_TILE // MX_GROUP)
+                            h_fp32 = pl.tile.assemble(h_fp32, gated, [0, h_a0])
+                        h_fp32_valid = pl.set_validshape(h_fp32, valid_rows, QUANT_TILE)
+                        h_fp32_padded = pl.fillpad(h_fp32_valid, pad_value=pl.PadValue.zero)
+                        h_quant, h_scale = pl.quant_mx(h_fp32_padded, group_axis=1)
+                        h_tile_mx = pl.store(h_quant, [0, a_base], h_tile_mx)
+                        scale_offset = ab_idx * RECV_TILE * (QUANT_TILE // MX_GROUP)
                         h_tile_scale_backing = pl.store(
                             pl.reshape(h_scale, [1, RECV_TILE * (QUANT_TILE // MX_GROUP)]),
                             [0, scale_offset],
