@@ -74,6 +74,59 @@ def test_mxfp4_bridge_keeps_leading_expert_dimensions_independent():
         assert torch.equal(mx.unpack_b_scale(packed_scale[expert].view(torch.uint8)), scale_codes[expert].T)
 
 
+def test_mxfp4_pair_lut_contains_both_fp8_payloads():
+    pair_lut = mx.build_mxfp4_pair_lut()
+    pair_bytes = pair_lut.contiguous().view(torch.uint8).reshape(2, 256, 2)
+    packed = torch.arange(256, dtype=torch.int64)
+    fp8_codes = torch.tensor(mx.NIBBLE_LUT, dtype=torch.uint8)
+
+    assert pair_lut.shape == (2, 256)
+    assert torch.equal(pair_lut[0], pair_lut[1])
+    assert torch.equal(pair_bytes[0, :, 0], fp8_codes[packed & 0x0F])
+    assert torch.equal(pair_bytes[0, :, 1], fp8_codes[packed >> 4])
+
+
+def test_mxfp4_tile_major_layout_round_trips():
+    indices = torch.arange(2 * 64 * 64, dtype=torch.int64).reshape(2, 64, 64) % 16
+    weights = mx.nibble_indices_to_fp8(indices)
+
+    packed = mx.pack_mxfp4_weight_tiles(weights, 16, 32, "up_down")
+    restored = mx.unpack_mxfp4_weight_tiles(
+        packed,
+        64,
+        64,
+        16,
+        32,
+        "up_down",
+    )
+
+    assert packed.shape == (2, 16, 128)
+    assert torch.equal(restored.view(torch.uint8), weights.view(torch.uint8))
+
+
+def test_mxfp4_checkpoint_repack_preserves_codes():
+    indices_nk = torch.arange(2 * 32 * 64, dtype=torch.int64).reshape(2, 32, 64) % 16
+    checkpoint_packed = _pack_checkpoint_nibbles(indices_nk)
+
+    packed = mx.repack_mxfp4_checkpoint_to_tiles(
+        checkpoint_packed,
+        16,
+        32,
+        "up_down",
+    )
+    restored = mx.unpack_mxfp4_weight_tiles(
+        packed,
+        64,
+        32,
+        16,
+        32,
+        "up_down",
+    )
+    expected = mx.nibble_indices_to_fp8(indices_nk.transpose(-2, -1))
+
+    assert torch.equal(restored.view(torch.uint8), expected.view(torch.uint8))
+
+
 def test_mx_scale_pack_round_trips():
     a = torch.arange(32 * 4, dtype=torch.uint8).reshape(32, 4)
     b = torch.arange(4 * 32, dtype=torch.uint8).reshape(4, 32)

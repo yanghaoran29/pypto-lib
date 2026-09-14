@@ -6,13 +6,11 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-"""Host-side MXFP4/MXFP8 and C8 cache helpers for DeepSeek-V4-Pro.
+"""MXFP4/MXFP8 and C8 cache helpers for DeepSeek-V4-Pro.
 
-Routed-expert checkpoint weights are packed MXFP4 and occupy the right-hand
-side of the model's Cube matmuls. PyPTO supports FP4 only through an explicit
-left-operand cast, so this module expands every FP4 nibble to its exact FP8E4M3
-representation while preserving the checkpoint's E8M0 group scale. Activations
-are quantized on device with ``pl.quant_mx``.
+Routed-expert checkpoint weights are repacked into a board-ready tile-major
+MXFP4 layout. Each mixed matmul expands only its current weight tile to the
+exact FP8E4M3 representation on device while preserving E8M0 group scales.
 """
 
 from __future__ import annotations
@@ -48,6 +46,164 @@ NIBBLE_LUT = [
     0xC8,
     0xCC,
 ]
+
+
+def build_mxfp4_pair_lut():
+    """Build a packed-byte LUT whose INT16 entries contain two FP8 payloads."""
+    import torch
+
+    packed = torch.arange(256, dtype=torch.int64)
+    fp8_codes = torch.tensor(NIBBLE_LUT, dtype=torch.int64)
+    low_codes = fp8_codes[packed & 0x0F]
+    high_codes = fp8_codes[packed >> 4]
+    pairs_u16 = low_codes | (high_codes << 8)
+    pairs_i16 = torch.where(pairs_u16 < 0x8000, pairs_u16, pairs_u16 - 0x10000)
+    return pairs_i16.to(torch.int16).reshape(1, 256).repeat(2, 1).contiguous()
+
+
+def _pack_mxfp4_nibbles_kn_tiles(nibbles_kn, k_tile, n_tile, split_mode):
+    """Pack one ``[K, N]`` nibble grid into tile-major AIV lane rows."""
+    k, n = nibbles_kn.shape
+    if k % k_tile != 0 or n % n_tile != 0:
+        raise ValueError("MXFP4 tile packing requires K and N to divide their tiles")
+    if k_tile % 2 != 0 or n_tile % 2 != 0:
+        raise ValueError("MXFP4 tile packing requires even K and N tiles")
+
+    k_blocks = k // k_tile
+    n_blocks = n // n_tile
+    blocked = nibbles_kn.reshape(k_blocks, k_tile, n_blocks, n_tile)
+    blocked = blocked.permute(2, 0, 1, 3)
+    if split_mode == "up_down":
+        lanes = blocked.reshape(n_blocks, k_blocks, 2, k_tile // 2, n_tile)
+    elif split_mode == "left_right":
+        if n_tile % 4 != 0:
+            raise ValueError("left-right MXFP4 packing requires N tile divisible by four")
+        lanes = blocked.reshape(n_blocks, k_blocks, k_tile, 2, n_tile // 2)
+        lanes = lanes.permute(0, 1, 3, 2, 4)
+    else:
+        raise ValueError(f"unsupported MXFP4 split mode: {split_mode!r}")
+
+    low = lanes[..., 0::2] & 0x0F
+    high = lanes[..., 1::2] & 0x0F
+    packed = low | (high << 4)
+    lane_bytes = k_tile * n_tile // 4
+    return packed.contiguous().reshape(n_blocks * k_blocks * 2, lane_bytes)
+
+
+def _mxfp8_grid_to_mxfp4_nibbles(weight):
+    """Map an FP8 grid restricted to the MXFP4 value set back to nibble codes."""
+    import torch
+
+    codes = weight.contiguous().view(torch.uint8)
+    inverse = torch.zeros(256, dtype=torch.uint8)
+    valid = torch.zeros(256, dtype=torch.bool)
+    lut_codes = torch.tensor(NIBBLE_LUT, dtype=torch.uint8)
+    lut_indices = lut_codes.to(torch.int64)
+    inverse[lut_indices] = torch.arange(16, dtype=torch.uint8)
+    valid[lut_indices] = True
+    code_indices = codes.to(torch.int64)
+    if not bool(valid[code_indices].all()):
+        raise ValueError("MXFP8 fixture contains a code outside the MXFP4 LUT")
+    return inverse[code_indices]
+
+
+def pack_mxfp4_weight_tiles(weight, k_tile, n_tile, split_mode="up_down"):
+    """Pack ``[..., K, N]`` MXFP4-grid FP8 weights into tile-major lane rows."""
+    import torch
+
+    *leading, k, n = weight.shape
+    lane_bytes = k_tile * n_tile // 4
+    tile_rows = (k // k_tile) * (n // n_tile) * 2
+    weights = weight.reshape(-1, k, n)
+    packed = torch.empty(weights.shape[0], tile_rows, lane_bytes, dtype=torch.uint8)
+    for batch in range(weights.shape[0]):
+        nibbles_kn = _mxfp8_grid_to_mxfp4_nibbles(weights[batch])
+        packed[batch] = _pack_mxfp4_nibbles_kn_tiles(
+            nibbles_kn,
+            k_tile,
+            n_tile,
+            split_mode,
+        )
+    return packed.reshape(*leading, tile_rows, lane_bytes)
+
+
+def repack_mxfp4_checkpoint_to_tiles(
+    weight_packed,
+    k_tile,
+    n_tile,
+    split_mode="up_down",
+):
+    """Repack ``[..., N, K/2]`` checkpoint bytes into tile-major lane rows."""
+    import torch
+
+    packed_nk = weight_packed.contiguous().view(torch.uint8)
+    *leading, n, half_k = packed_nk.shape
+    k = half_k * 2
+    lane_bytes = k_tile * n_tile // 4
+    tile_rows = (k // k_tile) * (n // n_tile) * 2
+    checkpoint = packed_nk.reshape(-1, n, half_k)
+    packed = torch.empty(checkpoint.shape[0], tile_rows, lane_bytes, dtype=torch.uint8)
+    for batch in range(checkpoint.shape[0]):
+        low_k = checkpoint[batch] & 0x0F
+        high_k = checkpoint[batch] >> 4
+        nibbles_nk = torch.stack((low_k, high_k), dim=-1).reshape(n, k)
+        nibbles_kn = nibbles_nk.transpose(0, 1).contiguous()
+        packed[batch] = _pack_mxfp4_nibbles_kn_tiles(
+            nibbles_kn,
+            k_tile,
+            n_tile,
+            split_mode,
+        )
+    return packed.reshape(*leading, tile_rows, lane_bytes)
+
+
+def unpack_mxfp4_weight_tiles(
+    packed,
+    k,
+    n,
+    k_tile,
+    n_tile,
+    split_mode="up_down",
+):
+    """Expand tile-major lane rows into FP8 ``[..., K, N]`` weights."""
+    import torch
+
+    *leading, tile_rows, lane_bytes = packed.shape
+    k_blocks = k // k_tile
+    n_blocks = n // n_tile
+    expected_rows = n_blocks * k_blocks * 2
+    expected_bytes = k_tile * n_tile // 4
+    if tile_rows != expected_rows or lane_bytes != expected_bytes:
+        raise ValueError("MXFP4 tile-major payload does not match the requested matrix")
+
+    payloads = packed.contiguous().view(torch.uint8).reshape(-1, tile_rows, lane_bytes)
+    output = torch.empty(payloads.shape[0], k, n, dtype=torch.float8_e4m3fn)
+    for batch in range(payloads.shape[0]):
+        if split_mode == "up_down":
+            lane_shape = (n_blocks, k_blocks, 2, k_tile // 2, n_tile // 2)
+            lane_bytes_view = payloads[batch].reshape(lane_shape)
+            low = lane_bytes_view & 0x0F
+            high = lane_bytes_view >> 4
+            lanes = torch.stack((low, high), dim=-1)
+            blocked = lanes.reshape(n_blocks, k_blocks, k_tile, n_tile)
+        elif split_mode == "left_right":
+            lane_shape = (n_blocks, k_blocks, 2, k_tile, n_tile // 4)
+            lane_bytes_view = payloads[batch].reshape(lane_shape)
+            low = lane_bytes_view & 0x0F
+            high = lane_bytes_view >> 4
+            lanes = torch.stack((low, high), dim=-1)
+            lanes = lanes.reshape(n_blocks, k_blocks, 2, k_tile, n_tile // 2)
+            blocked = lanes.permute(0, 1, 3, 2, 4).reshape(
+                n_blocks,
+                k_blocks,
+                k_tile,
+                n_tile,
+            )
+        else:
+            raise ValueError(f"unsupported MXFP4 split mode: {split_mode!r}")
+        nibbles_kn = blocked.permute(1, 2, 0, 3).reshape(k, n)
+        output[batch] = nibble_indices_to_fp8(nibbles_kn)
+    return output.reshape(*leading, k, n)
 
 
 def pack_a_scale(scale_codes):
