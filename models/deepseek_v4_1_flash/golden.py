@@ -15,12 +15,40 @@ from models.deepseek_v4_1_flash.config import FLASH
 from models.deepseek_v4_1_flash.quantization import mxfp8_linear
 
 
+def _newton_rsqrt(x: torch.Tensor) -> torch.Tensor:
+    """Match A5 RMS: ``rsqrt`` plus one Newton step ``y*(1.5-0.5*x*y*y)``.
+
+    Host ``torch.rsqrt`` is already close to correctly rounded, so the correction
+    is nearly a no-op here.  The recurrence still has to match the kernel, and
+    ``sum * (1/width)`` (not ``mean``) matters for Q_LORA=1280.
+    """
+    y0 = torch.rsqrt(x)
+    inv_sq = y0 * y0
+    correction = (x * inv_sq).mul(-0.5).add(1.5)
+    return y0 * correction
+
+
 def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float = FLASH.rms_norm_eps) -> torch.Tensor:
-    """Apply RMSNorm in FP32 and restore the activation dtype."""
+    """Apply RMSNorm in FP32 with the A5 Newton rsqrt, then restore dtype."""
     dtype = x.dtype
     value = x.float()
-    value = value * torch.rsqrt(value.square().mean(dim=-1, keepdim=True) + eps)
-    return (value * weight.float()).to(dtype)
+    width_inv = 1.0 / float(value.shape[-1])
+    rms_arg = value.square().sum(dim=-1, keepdim=True).mul(width_inv).add(eps)
+    return (value * _newton_rsqrt(rms_arg) * weight.float()).to(dtype)
+
+
+def _two_way_softmax_pool(values: torch.Tensor, score: torch.Tensor, dim: int) -> torch.Tensor:
+    """2-way softmax via exp/div, matching the compressor vector kernel."""
+    score = score.float()
+    maximum = score.amax(dim=dim, keepdim=True)
+    exponentials = torch.exp(score - maximum)
+    weights = exponentials / exponentials.sum(dim=dim, keepdim=True)
+    return (values.float() * weights).sum(dim=dim)
+
+
+def _bf16_pv(weights: torch.Tensor, values: torch.Tensor, equation: str) -> torch.Tensor:
+    """Cast softmax weights to BF16 before the PV matmul, matching A5 Cube."""
+    return torch.einsum(equation, weights.to(torch.bfloat16).float(), values.float())
 
 
 def rope_interleave(
@@ -55,11 +83,22 @@ def qkv_proj_rope(
     sin: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Project normalized query latent and shared KV, then rotate their RoPE tails."""
-    qr = rms_norm(mxfp8_linear(x, wq_a, wq_a_scale), q_norm_weight)
+    # The device keeps the MX Cube accumulator in FP32 through RMSNorm, then
+    # rounds the normalized latent to BF16 before the second projection.
+    qr_fp32 = rms_norm(
+        mxfp8_linear(x, wq_a, wq_a_scale, output_dtype=torch.float32),
+        q_norm_weight,
+    )
+    qr = qr_fp32.to(x.dtype)
     head_dim = wkv.shape[-1]
     num_heads = wq_b.shape[-1] // head_dim
-    q = mxfp8_linear(qr, wq_b, wq_b_scale).unflatten(-1, (num_heads, head_dim))
-    kv = rms_norm(mxfp8_linear(x, wkv, wkv_scale), kv_norm_weight)
+    q = mxfp8_linear(
+        qr_fp32, wq_b, wq_b_scale, output_dtype=x.dtype
+    ).unflatten(-1, (num_heads, head_dim))
+    kv = rms_norm(
+        mxfp8_linear(x, wkv, wkv_scale, output_dtype=torch.float32),
+        kv_norm_weight,
+    ).to(x.dtype)
     rd = cos.shape[-1] * 2
     q = torch.cat((q[..., :-rd], rope_interleave(q[..., -rd:], cos, sin)), dim=-1)
     kv = torch.cat((kv[..., :-rd], rope_interleave(kv[..., -rd:], cos, sin)), dim=-1)
@@ -100,8 +139,8 @@ def compressor_ratio2(
     complete = kv.shape[-2] // 2 * 2
     pooled_kv = kv[..., :complete, :].unflatten(-2, (-1, 2))
     pooled_score = score[..., :complete, :].unflatten(-2, (-1, 2))
-    pooled = (pooled_kv * pooled_score.softmax(dim=-2)).sum(dim=-2)
-    pooled = rms_norm(pooled.to(x.dtype), norm_weight)
+    pooled = _two_way_softmax_pool(pooled_kv, pooled_score, dim=-2)
+    pooled = rms_norm(pooled, norm_weight).to(x.dtype)
     return pooled, kv[..., complete:, :], score[..., complete:, :]
 
 
@@ -125,10 +164,12 @@ def compressor_ratio2_paged(
             state_cache[row, 0] = kv[token]
             state_cache[row, 1] = score[token]
         else:
-            pair_kv = torch.stack((state_cache[row, 0], kv[token]))
-            pair_score = torch.stack((state_cache[row, 1], score[token]))
-            pooled = (pair_kv * pair_score.softmax(dim=0)).sum(dim=0)
-            latent[token] = rms_norm(pooled.to(x.dtype), norm_weight)
+            pooled = _two_way_softmax_pool(
+                torch.stack((state_cache[row, 0], kv[token])),
+                torch.stack((state_cache[row, 1], score[token])),
+                dim=0,
+            )
+            latent[token] = rms_norm(pooled, norm_weight).to(x.dtype)
             publish[token] = True
     return latent, publish
 
@@ -291,7 +332,7 @@ def sparse_attention(
     sink_logits = sink.float().view(1, 1, -1, 1)
     denominator = torch.logsumexp(torch.cat((logits, sink_logits.expand_as(logits[..., :1])), dim=-1), dim=-1)
     weights = torch.exp(logits - denominator.unsqueeze(-1))
-    return torch.einsum("bqhk,bqkd->bqhd", weights, selected.float()).to(q.dtype)
+    return _bf16_pv(weights, selected, "bqhk,bqkd->bqhd").to(q.dtype)
 
 
 def sparse_attention_stats(
@@ -312,7 +353,7 @@ def sparse_attention_stats(
     exponentials = torch.exp(logits - finite_maximum.unsqueeze(-1))
     exponentials = exponentials.masked_fill(~torch.isfinite(logits), 0.0)
     denominator = exponentials.sum(dim=-1)
-    numerator = torch.einsum("bqhk,bqkd->bqhd", exponentials, selected.float())
+    numerator = _bf16_pv(exponentials, selected, "bqhk,bqkd->bqhd")
     return maximum, denominator, numerator
 
 
@@ -332,7 +373,7 @@ def paged_sparse_attention_stats(
     exponentials = torch.exp(logits - finite_maximum.unsqueeze(-1))
     exponentials = exponentials.masked_fill(~torch.isfinite(logits), 0.0)
     denominator = exponentials.sum(dim=-1)
-    numerator = torch.einsum("thk,tkd->thd", exponentials, selected.float())
+    numerator = _bf16_pv(exponentials, selected, "thk,tkd->thd")
     return maximum, denominator, numerator
 
 

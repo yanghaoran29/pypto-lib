@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 import torch
 
+from models.deepseek_v4_1_flash import config as C
 from models.deepseek_v4_1_flash.config import FLASH, AttentionMode
 from models.deepseek_v4_1_flash.golden import (
     compressor_ratio1,
@@ -78,6 +79,32 @@ def _publish_window(
     return updated
 
 
+def _restore_same_dispatch_rows(
+    quantized: torch.Tensor,
+    source: torch.Tensor,
+    slots: torch.Tensor,
+    publish_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Overlay fresh BF16 rows used directly by the fused device dispatch.
+
+    Cache payloads are still quantized and returned for later decode calls, but
+    the token that publishes a row in this dispatch attends to its fresh value
+    instead of reading its just-written low-precision payload back from HBM.
+    """
+    result = quantized.clone()
+    dst_rows = result.flatten(0, 1)
+    src_rows = source.flatten(0, 1)
+    valid = slots >= 0
+    if publish_mask is not None:
+        valid = valid & publish_mask
+    for token in range(slots.numel()):
+        if bool(valid[token]):
+            slot = int(slots[token])
+            if slot < dst_rows.shape[0]:
+                dst_rows[slot] = src_rows[slot].to(dst_rows.dtype)
+    return result
+
+
 def golden_swa_attention(
     x: torch.Tensor,
     wq_a: torch.Tensor,
@@ -117,6 +144,9 @@ def golden_swa_attention(
     updated_window = _publish_window(window_value, window_kv, window_slots)
     window_payload, updated_window_scale = quantize_mxfp8_cache(updated_window)
     quantized_window = dequantize_mxfp8_cache(window_payload, updated_window_scale).to(query.dtype)
+    quantized_window = _restore_same_dispatch_rows(
+        quantized_window, updated_window, window_slots
+    )
     window_stats = paged_sparse_attention_stats(query, quantized_window, window_indices)
     attended = merge_attention_stats((window_stats,), attn_sink).to(query.dtype)
     output = _project_output(attended, rope_cos, rope_sin, wo_a, wo_b, wo_b_scale)
@@ -189,13 +219,22 @@ def golden_compressed_attention(
     updated_window = _publish_window(window_value, window_kv, window_slots)
     window_payload, updated_window_scale = quantize_mxfp8_cache(updated_window)
     quantized_window = dequantize_mxfp8_cache(window_payload, updated_window_scale).to(query.dtype)
+    quantized_window = _restore_same_dispatch_rows(
+        quantized_window, updated_window, window_slots
+    )
     updated_compressed = dequantize_mxfp4_cache(
-        compressed_cache, compressed_cache_scale, group_size=16, scale_format="e4m3"
+        compressed_cache,
+        compressed_cache_scale,
+        group_size=C.COMPRESSED_CACHE_GROUP,
+        scale_format=C.COMPRESSED_CACHE_SCALE_FORMAT,
     ).to(query.dtype)
     updated_index = None
     if index_cache is not None and index_cache_scale is not None:
         updated_index = dequantize_mxfp4_cache(
-            index_cache, index_cache_scale, group_size=32, scale_format="e8m0"
+            index_cache,
+            index_cache_scale,
+            group_size=C.INDEX_CACHE_GROUP,
+            scale_format=C.INDEX_CACHE_SCALE_FORMAT,
         ).to(query.dtype)
     updated_state = None if compressor_state is None else compressor_state.clone()
     topk_indices = compressed_indices
@@ -255,11 +294,19 @@ def golden_compressed_attention(
             raise ValueError("indexing modes require cache addressing and causal compressed lengths")
         if mode is AttentionMode.FULL:
             index_payload, updated_index_scale = quantize_mxfp4_cache(
-                updated_index, group_size=32, scale_format="e8m0"
+                updated_index,
+                group_size=C.INDEX_CACHE_GROUP,
+                scale_format=C.INDEX_CACHE_SCALE_FORMAT,
             )
             quantized_index = dequantize_mxfp4_cache(
-                index_payload, updated_index_scale, group_size=32, scale_format="e8m0"
+                index_payload,
+                updated_index_scale,
+                group_size=C.INDEX_CACHE_GROUP,
+                scale_format=C.INDEX_CACHE_SCALE_FORMAT,
             ).to(query.dtype)
+            quantized_index = _restore_same_dispatch_rows(
+                quantized_index, updated_index, compressed_slots, publish_mask
+            )
         else:
             index_payload = index_cache
             updated_index_scale = index_cache_scale
@@ -291,11 +338,19 @@ def golden_compressed_attention(
 
     if mode is AttentionMode.FULL:
         compressed_payload, updated_compressed_scale = quantize_mxfp4_cache(
-            updated_compressed, group_size=16, scale_format="e4m3"
+            updated_compressed,
+            group_size=C.COMPRESSED_CACHE_GROUP,
+            scale_format=C.COMPRESSED_CACHE_SCALE_FORMAT,
         )
         quantized_compressed = dequantize_mxfp4_cache(
-            compressed_payload, updated_compressed_scale, group_size=16, scale_format="e4m3"
+            compressed_payload,
+            updated_compressed_scale,
+            group_size=C.COMPRESSED_CACHE_GROUP,
+            scale_format=C.COMPRESSED_CACHE_SCALE_FORMAT,
         ).to(query.dtype)
+        quantized_compressed = _restore_same_dispatch_rows(
+            quantized_compressed, updated_compressed, compressed_slots, publish_mask
+        )
     else:
         compressed_payload = compressed_cache
         updated_compressed_scale = compressed_cache_scale
