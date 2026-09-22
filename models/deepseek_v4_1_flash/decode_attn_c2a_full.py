@@ -272,9 +272,8 @@ def permute_index_query(
 def publish_compressed(
     latent: pl.Tensor[[T_DYN, HEAD_DIM], pl.BF16],
     slots: pl.Tensor[[T_DYN], pl.INT64],
-    # Physical UINT8 layout for nibble codec; host ABI is FP4E2M1X2
-    # (torch.float4_e2m1fn_x2: two FP4 / byte), not scalar pl.FP4.
-    cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, CMP_PACKED], pl.UINT8],
+    # FP4E2M1X2 GM carrier; encode via MX scale + pl.cast(..., FP4E2M1X2).
+    cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, CMP_PACKED], pl.FP4E2M1X2],
     scales: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, CMP_SCALES], pl.FP8E4M3FN],
     num_tokens: pl.Scalar[pl.INT32],
     cache_ready: pl.Scalar[pl.TASK_ID],
@@ -297,29 +296,11 @@ def publish_compressed(
             normalized = pl.minimum(
                 pl.maximum(pl.row_expand_div(groups, pl.cast(stored, pl.FP32)), -6.0), 6.0
             )
-            magnitude = pl.abs(normalized)
-            # Nearest E2M1 magnitude index: seven minus the number of table midpoints
-            # at or above |v|, which resolves an exact midpoint toward zero.
-            step0 = pl.shrs(pl.sub(pl.reinterpret_view(pl.sub(magnitude, 0.25), pl.INT32), 1), 31)
-            step1 = pl.shrs(pl.sub(pl.reinterpret_view(pl.sub(magnitude, 0.75), pl.INT32), 1), 31)
-            step2 = pl.shrs(pl.sub(pl.reinterpret_view(pl.sub(magnitude, 1.25), pl.INT32), 1), 31)
-            step3 = pl.shrs(pl.sub(pl.reinterpret_view(pl.sub(magnitude, 1.75), pl.INT32), 1), 31)
-            step4 = pl.shrs(pl.sub(pl.reinterpret_view(pl.sub(magnitude, 2.5), pl.INT32), 1), 31)
-            step5 = pl.shrs(pl.sub(pl.reinterpret_view(pl.sub(magnitude, 3.5), pl.INT32), 1), 31)
-            step6 = pl.shrs(pl.sub(pl.reinterpret_view(pl.sub(magnitude, 5.0), pl.INT32), 1), 31)
-            index = pl.add(
-                pl.add(pl.add(step0, step1), pl.add(step2, step3)),
-                pl.add(pl.add(step4, step5), pl.add(step6, 7)),
+            norm_row = pl.set_validshape(pl.reshape(normalized, [1, HEAD_DIM * 2]), 1, HEAD_DIM)
+            payload = pl.cast(
+                pl.cast(norm_row, pl.BF16, mode="rint"), pl.FP4E2M1X2, mode="rint"
             )
-            sign = pl.shrs(pl.reinterpret_view(normalized, pl.INT32), 31)
-            codes = pl.reshape(pl.sub(index, pl.mul(sign, 8)), [1, HEAD_DIM * 2])
-            low = pl.gather(codes, mask_pattern=pl.tile.MaskPattern.P0101, output_dtype=pl.INT32)
-            high = pl.gather(codes, mask_pattern=pl.tile.MaskPattern.P1010, output_dtype=pl.INT32)
-            packed = pl.add(low, pl.mul(high, 16))
-            signed = pl.sub(packed, pl.mul(pl.shrs(packed, 7), 256))
-            flat[slot : slot + 1, :] = pl.set_validshape(
-                pl.reinterpret_view(pl.cast(signed, pl.INT8), pl.UINT8), 1, CMP_PACKED
-            )
+            flat[slot : slot + 1, :] = pl.set_validshape(payload, 1, CMP_PACKED)
             scale_flat[slot : slot + 1, :] = pl.set_validshape(
                 pl.reshape(stored, [1, HEAD_DIM * 2 // 16]), 1, CMP_SCALES
             )
@@ -330,7 +311,7 @@ def publish_compressed(
 def publish_index_key(
     keys: pl.Tensor[[T_DYN, INDEX_DIM], pl.BF16],
     slots: pl.Tensor[[T_DYN], pl.INT64],
-    cache: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, IDX_PACKED], pl.UINT8],
+    cache: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, IDX_PACKED], pl.FP4E2M1X2],
     scales: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, IDX_SCALES], pl.FP8E8M0],
     num_tokens: pl.Scalar[pl.INT32],
     cache_ready: pl.Scalar[pl.TASK_ID],
@@ -353,27 +334,11 @@ def publish_index_key(
             exponent = pl.shrs(pl.add(pl.reinterpret_view(raw, pl.INT32), 8388607), 23)
             factor = pl.reinterpret_view(pl.shls(exponent, 23), pl.FP32)
             normalized = pl.minimum(pl.maximum(pl.row_expand_div(groups, factor), -6.0), 6.0)
-            magnitude = pl.abs(normalized)
-            step0 = pl.shrs(pl.sub(pl.reinterpret_view(pl.sub(magnitude, 0.25), pl.INT32), 1), 31)
-            step1 = pl.shrs(pl.sub(pl.reinterpret_view(pl.sub(magnitude, 0.75), pl.INT32), 1), 31)
-            step2 = pl.shrs(pl.sub(pl.reinterpret_view(pl.sub(magnitude, 1.25), pl.INT32), 1), 31)
-            step3 = pl.shrs(pl.sub(pl.reinterpret_view(pl.sub(magnitude, 1.75), pl.INT32), 1), 31)
-            step4 = pl.shrs(pl.sub(pl.reinterpret_view(pl.sub(magnitude, 2.5), pl.INT32), 1), 31)
-            step5 = pl.shrs(pl.sub(pl.reinterpret_view(pl.sub(magnitude, 3.5), pl.INT32), 1), 31)
-            step6 = pl.shrs(pl.sub(pl.reinterpret_view(pl.sub(magnitude, 5.0), pl.INT32), 1), 31)
-            index = pl.add(
-                pl.add(pl.add(step0, step1), pl.add(step2, step3)),
-                pl.add(pl.add(step4, step5), pl.add(step6, 7)),
+            norm_row = pl.set_validshape(pl.reshape(normalized, [1, INDEX_DIM * 8]), 1, INDEX_DIM)
+            payload = pl.cast(
+                pl.cast(norm_row, pl.BF16, mode="rint"), pl.FP4E2M1X2, mode="rint"
             )
-            sign = pl.shrs(pl.reinterpret_view(normalized, pl.INT32), 31)
-            codes = pl.reshape(pl.sub(index, pl.mul(sign, 8)), [1, INDEX_DIM * 8])
-            low = pl.gather(codes, mask_pattern=pl.tile.MaskPattern.P0101, output_dtype=pl.INT32)
-            high = pl.gather(codes, mask_pattern=pl.tile.MaskPattern.P1010, output_dtype=pl.INT32)
-            packed = pl.add(low, pl.mul(high, 16))
-            signed = pl.sub(packed, pl.mul(pl.shrs(packed, 7), 256))
-            flat[slot : slot + 1, :] = pl.set_validshape(
-                pl.reinterpret_view(pl.cast(signed, pl.INT8), pl.UINT8), 1, IDX_PACKED
-            )
+            flat[slot : slot + 1, :] = pl.set_validshape(payload, 1, IDX_PACKED)
             signed_exponent = pl.sub(exponent, pl.mul(pl.shrs(exponent, 7), 256))
             encoded = pl.reinterpret_view(
                 pl.reinterpret_view(pl.cast(signed_exponent, pl.INT8), pl.UINT8), pl.FP8E8M0
@@ -386,7 +351,7 @@ def publish_index_key(
 def index_select(
     query: pl.Tensor[[T_DYN, INDEX_H * INDEX_DIM], pl.BF16],
     weights: pl.Tensor[[T_DYN, INDEX_H], pl.BF16],
-    cache: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, IDX_PACKED], pl.UINT8],
+    cache: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, IDX_PACKED], pl.FP4E2M1X2],
     scales: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, IDX_SCALES], pl.FP8E8M0],
     block_table: pl.Tensor[[B_DYN, TABLE_DYN], pl.INT32],
     token_to_req_indices: pl.Tensor[[T_DYN], pl.INT32],
@@ -440,43 +405,7 @@ def index_select(
                     block_id = pl.read(block_table, [request, p0 // 128])
                     base = pl.cast(pl.max(block_id, 0), pl.INDEX) * 128 + p0 % 128
                     packed = flat[base : base + SCORE_TILE, :]
-                    wide = pl.reinterpret_view(pl.cast(packed, target_type=pl.UINT16), pl.INT16)
-                    low = pl.ands(wide, 15)
-                    high = pl.ands(pl.shrs(wide, 4), 15)
-                    low_sign = pl.cast(pl.shrs(low, 3), pl.FP32)
-                    low_exponent = pl.cast(pl.shrs(pl.ands(low, 7), 1), pl.FP32)
-                    low_fraction = pl.cast(pl.ands(low, 1), pl.FP32)
-                    # 2**e over e in 0..3 is exactly (e**3 + 5e + 6) / 6, which avoids an
-                    # unsupported integer cast on the exponent-assembly path.
-                    low_pow2 = pl.div(
-                        pl.add(pl.add(pl.mul(pl.mul(low_exponent, low_exponent), low_exponent),
-                                      pl.mul(low_exponent, 5.0)), 6.0),
-                        6.0,
-                    )
-                    low_normal = pl.mul(pl.mul(low_pow2, 0.5), pl.add(pl.mul(low_fraction, 0.5), 1.0))
-                    low_is_normal = pl.minimum(low_exponent, 1.0)
-                    low_magnitude = pl.add(
-                        pl.mul(low_is_normal, low_normal),
-                        pl.mul(pl.mul(pl.sub(low_is_normal, 1.0), -1.0), pl.mul(low_fraction, 0.5)),
-                    )
-                    low_value = pl.mul(low_magnitude, pl.mul(pl.sub(pl.mul(low_sign, 2.0), 1.0), -1.0))
-                    high_sign = pl.cast(pl.shrs(high, 3), pl.FP32)
-                    high_exponent = pl.cast(pl.shrs(pl.ands(high, 7), 1), pl.FP32)
-                    high_fraction = pl.cast(pl.ands(high, 1), pl.FP32)
-                    # 2**e over e in 0..3 is exactly (e**3 + 5e + 6) / 6, which avoids an
-                    # unsupported integer cast on the exponent-assembly path.
-                    high_pow2 = pl.div(
-                        pl.add(pl.add(pl.mul(pl.mul(high_exponent, high_exponent), high_exponent),
-                                      pl.mul(high_exponent, 5.0)), 6.0),
-                        6.0,
-                    )
-                    high_normal = pl.mul(pl.mul(high_pow2, 0.5), pl.add(pl.mul(high_fraction, 0.5), 1.0))
-                    high_is_normal = pl.minimum(high_exponent, 1.0)
-                    high_magnitude = pl.add(
-                        pl.mul(high_is_normal, high_normal),
-                        pl.mul(pl.mul(pl.sub(high_is_normal, 1.0), -1.0), pl.mul(high_fraction, 0.5)),
-                    )
-                    high_value = pl.mul(high_magnitude, pl.mul(pl.sub(pl.mul(high_sign, 2.0), 1.0), -1.0))
+                    decoded = pl.cast(pl.cast(packed, pl.BF16), pl.FP32)
                     scale_tile = pl.slice(scale_wide, [SCORE_TILE // 8, 32], [base // 8, 0])
                     raw_codes = pl.reinterpret_view(scale_tile, pl.UINT8)
                     signed_codes = pl.cast(pl.reinterpret_view(raw_codes, pl.INT8), pl.INT32)
@@ -485,22 +414,13 @@ def index_select(
                         pl.maximum(pl.shls(codes, 23), E8M0_FLOOR_BITS), pl.FP32
                     )
                     factor_column = pl.reshape(factors, [SCORE_TILE * IDX_SCALES, 1])
-                    low_scaled = pl.reshape(
+                    scaled = pl.reshape(
                         pl.row_expand_mul(
-                            pl.reshape(low_value, [SCORE_TILE * IDX_SCALES, 16]), factor_column
+                            pl.reshape(decoded, [SCORE_TILE * IDX_SCALES, 32]), factor_column
                         ),
-                        [SCORE_TILE, IDX_PACKED],
+                        [SCORE_TILE, INDEX_DIM],
                     )
-                    high_scaled = pl.reshape(
-                        pl.row_expand_mul(
-                            pl.reshape(high_value, [SCORE_TILE * IDX_SCALES, 16]), factor_column
-                        ),
-                        [SCORE_TILE, IDX_PACKED],
-                    )
-                    keys = pl.concat(
-                        pl.cast(low_scaled, pl.BF16, mode="rint"),
-                        pl.cast(high_scaled, pl.BF16, mode="rint"),
-                    )
+                    keys = pl.cast(scaled, pl.BF16, mode="rint")
                     query_tile = query_flat[t * INDEX_H : t * INDEX_H + INDEX_H, :]
                     scored = pl.maximum(pl.matmul(query_tile, keys, b_trans=True), 0.0)
                     row = pl.col_sum(pl.row_expand_mul(scored, weight_row))
@@ -545,7 +465,7 @@ def gather_sparse(
     window_cache: pl.Tensor[[ORI_BLOCKS_DYN, 128, 1, HEAD_DIM], pl.FP8E4M3FN],
     window_scales: pl.Tensor[[ORI_BLOCKS_DYN, 128, 1, HEAD_DIM // 32], pl.FP8E8M0],
     window_indices: pl.Tensor[[T_DYN, 128], pl.INT32],
-    compressed_cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, CMP_PACKED], pl.UINT8],
+    compressed_cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, CMP_PACKED], pl.FP4E2M1X2],
     compressed_scales: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, CMP_SCALES], pl.FP8E4M3FN],
     topk_indices: pl.Tensor[[T_DYN, INDEX_TOPK], pl.INT32],
     selected: pl.Tensor[[QUERY_TILE, SPARSE_WIDTH, HEAD_DIM], pl.BF16],
@@ -604,50 +524,7 @@ def gather_sparse(
             if row_i32 >= 0:
                 row = pl.cast(row_i32, pl.INDEX)
                 packed = compressed_flat[row : row + 1, :]
-                wide = pl.reinterpret_view(pl.cast(packed, target_type=pl.UINT16), pl.INT16)
-                low = pl.ands(wide, 15)
-                high = pl.ands(pl.shrs(wide, 4), 15)
-                low_sign = pl.cast(pl.shrs(low, 3), pl.FP32)
-                low_exponent = pl.cast(pl.shrs(pl.ands(low, 7), 1), pl.FP32)
-                low_fraction = pl.cast(pl.ands(low, 1), pl.FP32)
-                # 2**e over e in 0..3 is exactly (e**3 + 5e + 6) / 6, which avoids an
-                # unsupported integer cast on the exponent-assembly path.
-                low_pow2 = pl.div(
-                    pl.add(pl.add(pl.mul(pl.mul(low_exponent, low_exponent), low_exponent),
-                                  pl.mul(low_exponent, 5.0)), 6.0),
-                    6.0,
-                )
-                low_normal = pl.mul(pl.mul(low_pow2, 0.5), pl.add(pl.mul(low_fraction, 0.5), 1.0))
-                low_is_normal = pl.minimum(low_exponent, 1.0)
-                low_magnitude = pl.add(
-                    pl.mul(low_is_normal, low_normal),
-                    pl.mul(pl.mul(pl.sub(low_is_normal, 1.0), -1.0), pl.mul(low_fraction, 0.5)),
-                )
-                low_value = pl.mul(low_magnitude, pl.mul(pl.sub(pl.mul(low_sign, 2.0), 1.0), -1.0))
-                high_sign = pl.cast(pl.shrs(high, 3), pl.FP32)
-                high_exponent = pl.cast(pl.shrs(pl.ands(high, 7), 1), pl.FP32)
-                high_fraction = pl.cast(pl.ands(high, 1), pl.FP32)
-                # 2**e over e in 0..3 is exactly (e**3 + 5e + 6) / 6, which avoids an
-                # unsupported integer cast on the exponent-assembly path.
-                high_pow2 = pl.div(
-                    pl.add(pl.add(pl.mul(pl.mul(high_exponent, high_exponent), high_exponent),
-                                  pl.mul(high_exponent, 5.0)), 6.0),
-                    6.0,
-                )
-                high_normal = pl.mul(pl.mul(high_pow2, 0.5), pl.add(pl.mul(high_fraction, 0.5), 1.0))
-                high_is_normal = pl.minimum(high_exponent, 1.0)
-                high_magnitude = pl.add(
-                    pl.mul(high_is_normal, high_normal),
-                    pl.mul(pl.mul(pl.sub(high_is_normal, 1.0), -1.0), pl.mul(high_fraction, 0.5)),
-                )
-                high_value = pl.mul(high_magnitude, pl.mul(pl.sub(pl.mul(high_sign, 2.0), 1.0), -1.0))
-                interleaved = pl.full([1, HEAD_DIM], dtype=pl.FP32, value=0.0)
-                interleaved = pl.tensor.scatter(
-                    low_value, mask_pattern=pl.tile.MaskPattern.P0101, dst=interleaved
-                )
-                interleaved = pl.tensor.scatter(
-                    high_value, mask_pattern=pl.tile.MaskPattern.P1010, dst=interleaved
-                )
+                interleaved = pl.cast(pl.cast(packed, pl.BF16), pl.FP32)
                 factors = pl.cast(compressed_scale_flat[row : row + 1, :], pl.FP32)
                 scaled = pl.row_expand_mul(
                     pl.reshape(interleaved, [CMP_SCALES, 16]), pl.reshape(factors, [CMP_SCALES, 1])
@@ -742,11 +619,11 @@ def c2a_full_partial(
     window_indices: pl.Tensor[[T_DYN, 128], pl.INT32],
     window_cache: pl.Tensor[[ORI_BLOCKS_DYN, 128, 1, HEAD_DIM], pl.FP8E4M3FN],
     window_cache_scale: pl.Tensor[[ORI_BLOCKS_DYN, 128, 1, HEAD_DIM // 32], pl.FP8E8M0],
-    compressed_cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, CMP_PACKED], pl.UINT8],
+    compressed_cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, CMP_PACKED], pl.FP4E2M1X2],
     compressed_cache_scale: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, CMP_SCALES], pl.FP8E4M3FN],
     token_to_req_indices: pl.Tensor[[T_DYN], pl.INT32],
     compressed_lens: pl.Tensor[[T_DYN], pl.INT32],
-    index_cache: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, IDX_PACKED], pl.UINT8],
+    index_cache: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, IDX_PACKED], pl.FP4E2M1X2],
     index_cache_scale: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, IDX_SCALES], pl.FP8E8M0],
     index_block_table: pl.Tensor[[B_DYN, TABLE_DYN], pl.INT32],
     position_ids: pl.Tensor[[T_DYN], pl.INT32],
@@ -951,13 +828,13 @@ def decode_attn_c2a_full(
     window_indices: pl.Tensor[[C.T_DYN, 128], pl.INT32],
     window_cache: pl.Tensor[[C.ORI_BLOCKS_DYN, 128, 1, C.HEAD_DIM], pl.FP8E4M3FN],
     window_cache_scale: pl.Tensor[[C.ORI_BLOCKS_DYN, 128, 1, C.HEAD_DIM // C.WINDOW_CACHE_GROUP], pl.FP8E8M0],
-    compressed_cache: pl.Tensor[[C.CMP_BLOCKS_DYN, 128, 1, C.HEAD_DIM // 2], pl.UINT8],
+    compressed_cache: pl.Tensor[[C.CMP_BLOCKS_DYN, 128, 1, C.HEAD_DIM // 2], pl.FP4E2M1X2],
     compressed_cache_scale: pl.Tensor[
         [C.CMP_BLOCKS_DYN, 128, 1, C.HEAD_DIM // C.COMPRESSED_CACHE_GROUP], pl.FP8E4M3FN
     ],
     token_to_req_indices: pl.Tensor[[C.T_DYN], pl.INT32],
     compressed_lens: pl.Tensor[[C.T_DYN], pl.INT32],
-    index_cache: pl.Tensor[[C.INDEX_BLOCKS_DYN, 128, 1, C.INDEX_DIM // 2], pl.UINT8],
+    index_cache: pl.Tensor[[C.INDEX_BLOCKS_DYN, 128, 1, C.INDEX_DIM // 2], pl.FP4E2M1X2],
     index_cache_scale: pl.Tensor[
         [C.INDEX_BLOCKS_DYN, 128, 1, C.INDEX_DIM // C.INDEX_CACHE_GROUP], pl.FP8E8M0
     ],
@@ -1030,11 +907,10 @@ __all__ = ["golden_decode_attn_c2a_full", "decode_attn_c2a_full", "c2a_full_part
 #
 # Cache ABI: compressed-KV and index payloads store **FP4** (4-bit E2M1) values
 # packed as **FP4E2M1X2** (two FP4 per byte, low nibble = logical element 2i).
-# Host carrier: ``torch.float4_e2m1fn_x2``. Device kernels still annotate
-# ``pl.UINT8`` with the physical last dimension because ``pl.reinterpret_view``
-# cannot yet alias scalar ``pl.FP4`` (logical width) ↔ UINT8 for the nibble
-# codec. Do not equate ``pl.FP4`` with FP4E2M1X2 — the former is one element,
-# the latter is the packed byte.
+# Host carrier: ``torch.float4_e2m1fn_x2``. Device kernels annotate
+# ``pl.FP4E2M1X2`` with the physical last dimension; encode/decode use
+# ``pl.cast`` ↔ BF16 plus MX group scales. Do not equate ``pl.FP4`` with
+# FP4E2M1X2 — the former is one element, the latter is the packed byte.
 #
 # Arithmetic ABI: BF16_GEMM and PV_DTYPE pin the two places where CPU torch and the A5 Cube
 # disagree.  Both default to what the device and decode_swa.official_reference do, and both differ
@@ -1427,11 +1303,11 @@ def make_c2a_inputs(tokens=24, requests=6, seed=17, case="mixed", mode="decode")
         IDX_GROUP,
         "e8m0",
     )
-    from models.deepseek_v4_1_flash._fp4_abi import as_fp4e2m1x2_uint8
+    from models.deepseek_v4_1_flash._fp4_abi import as_fp4e2m1x2_payload
 
-    # Device kernels still take physical UINT8; host quantize emits FP4E2M1X2.
-    compressed_cache = as_fp4e2m1x2_uint8(compressed_cache)
-    index_cache = as_fp4e2m1x2_uint8(index_cache)
+    # Keep host FP4E2M1X2 carriers for device pl.FP4E2M1X2 signatures.
+    compressed_cache = as_fp4e2m1x2_payload(compressed_cache)
+    index_cache = as_fp4e2m1x2_payload(index_cache)
 
     values = {
         "x": torch.randn(tokens, C.D, generator=gen).bfloat16(),
@@ -1734,11 +1610,11 @@ def make_program(operator, capacity, world_size, epochs):
         window_indices: pl.Tensor[[C.T_DYN, 128], pl.INT32],
         window_cache: pl.InOut[pl.Tensor[[C.ORI_BLOCKS_DYN, 128, 1, C.HEAD_DIM], pl.FP8E4M3FN]],
         window_cache_scale: pl.InOut[pl.Tensor[[C.ORI_BLOCKS_DYN, 128, 1, C.HEAD_DIM // C.WINDOW_CACHE_GROUP], pl.FP8E8M0]],
-        compressed_cache: pl.InOut[pl.Tensor[[C.CMP_BLOCKS_DYN, 128, 1, CMP_PACKED], pl.UINT8]],
+        compressed_cache: pl.InOut[pl.Tensor[[C.CMP_BLOCKS_DYN, 128, 1, CMP_PACKED], pl.FP4E2M1X2]],
         compressed_cache_scale: pl.InOut[pl.Tensor[[C.CMP_BLOCKS_DYN, 128, 1, CMP_SCALES], pl.FP8E4M3FN]],
         token_to_req_indices: pl.Tensor[[C.T_DYN], pl.INT32],
         compressed_lens: pl.Tensor[[C.T_DYN], pl.INT32],
-        index_cache: pl.InOut[pl.Tensor[[C.INDEX_BLOCKS_DYN, 128, 1, IDX_PACKED], pl.UINT8]],
+        index_cache: pl.InOut[pl.Tensor[[C.INDEX_BLOCKS_DYN, 128, 1, IDX_PACKED], pl.FP4E2M1X2]],
         index_cache_scale: pl.InOut[pl.Tensor[[C.INDEX_BLOCKS_DYN, 128, 1, IDX_SCALES], pl.FP8E8M0]],
         index_block_table: pl.Tensor[[C.B_DYN, C.TABLE_DYN], pl.INT32],
         position_ids: pl.Tensor[[C.T_DYN], pl.INT32],
@@ -1814,11 +1690,11 @@ def make_program(operator, capacity, world_size, epochs):
         window_indices: pl.Tensor[[world_size, C.T_DYN, 128], pl.INT32],
         window_cache: pl.InOut[pl.Tensor[[world_size, C.ORI_BLOCKS_DYN, 128, 1, C.HEAD_DIM], pl.FP8E4M3FN]],
         window_cache_scale: pl.InOut[pl.Tensor[[world_size, C.ORI_BLOCKS_DYN, 128, 1, C.HEAD_DIM // C.WINDOW_CACHE_GROUP], pl.FP8E8M0]],
-        compressed_cache: pl.InOut[pl.Tensor[[world_size, C.CMP_BLOCKS_DYN, 128, 1, CMP_PACKED], pl.UINT8]],
+        compressed_cache: pl.InOut[pl.Tensor[[world_size, C.CMP_BLOCKS_DYN, 128, 1, CMP_PACKED], pl.FP4E2M1X2]],
         compressed_cache_scale: pl.InOut[pl.Tensor[[world_size, C.CMP_BLOCKS_DYN, 128, 1, CMP_SCALES], pl.FP8E4M3FN]],
         token_to_req_indices: pl.Tensor[[world_size, C.T_DYN], pl.INT32],
         compressed_lens: pl.Tensor[[world_size, C.T_DYN], pl.INT32],
-        index_cache: pl.InOut[pl.Tensor[[world_size, C.INDEX_BLOCKS_DYN, 128, 1, IDX_PACKED], pl.UINT8]],
+        index_cache: pl.InOut[pl.Tensor[[world_size, C.INDEX_BLOCKS_DYN, 128, 1, IDX_PACKED], pl.FP4E2M1X2]],
         index_cache_scale: pl.InOut[pl.Tensor[[world_size, C.INDEX_BLOCKS_DYN, 128, 1, IDX_SCALES], pl.FP8E8M0]],
         index_block_table: pl.Tensor[[world_size, C.B_DYN, C.TABLE_DYN], pl.INT32],
         position_ids: pl.Tensor[[world_size, C.T_DYN], pl.INT32],

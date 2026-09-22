@@ -17,21 +17,16 @@ Type layering (do not conflate)
 * **FP4E2M1X2** — one **byte** that holds **two** FP4 values (low nibble =
   logical element ``2i``, high nibble = ``2i+1``).
   - Torch host carrier: ``torch.float4_e2m1fn_x2`` (``element_size() == 1``).
+  - PyPTO IR / device storage: ``pl.FP4E2M1X2`` (``GetBit()==8``).
   - CANN / AICore packed typedef: ``float4_e2m1x2_t``.
   - Physical last dimension = logical FP4 count / 2.
-  - Binding a Torch ``[..., N]`` ``float4_e2m1fn_x2`` tensor into pypto yields
-    IR shape ``[..., 2N]`` of ``pl.FP4``.
 
-So: ``pl.FP4`` ≠ ``FP4E2M1X2``. The former is the scalar element; the latter is
-the packed storage/carrier used on the host (and historically as ``uint8``
-nibbles).
+So: ``pl.FP4`` ≠ ``pl.FP4E2M1X2``. The former is the scalar element; the latter
+is the packed GM / host carrier used for V4.1 compressed KV and index caches.
 
-Device kernels in this tree still annotate compressed / index cache payloads as
-``pl.UINT8`` with the **physical** (FP4E2M1X2) last dimension. ``pl.reinterpret_view``
-does not yet allow FP4↔UINT8, so the nibble publish/decode path cannot treat a
-``pl.FP4`` tensor as bytes without on-chip cast (deferred). Host goldens use
-``float4_e2m1fn_x2``; harnesses may ``view(torch.uint8)`` at the device boundary
-when a kernel still expects the UINT8 annotation.
+Device kernels annotate those caches as ``pl.FP4E2M1X2``. Publish/decode use
+``pl.cast`` between ``FP4E2M1X2`` and ``BF16`` plus MX group scales. Logical
+``pl.FP4`` is not used for GM cache storage.
 """
 
 from __future__ import annotations
@@ -88,7 +83,7 @@ as_fp4_payload = as_fp4e2m1x2_payload
 
 
 def as_fp4e2m1x2_uint8(payload: torch.Tensor) -> torch.Tensor:
-    """View an FP4E2M1X2 (or uint8) payload as ``uint8`` for nibble / device UINT8 paths."""
+    """View an FP4E2M1X2 (or uint8) payload as ``uint8`` for CPU nibble math."""
     if payload.dtype == torch.uint8:
         return payload
     if not is_fp4e2m1x2_torch_dtype(payload.dtype):
@@ -122,7 +117,7 @@ def probe_fp4e2m1x2_host_roundtrip() -> None:
         f"packed_bytes={packed_u8.numel()} fp4_elems={packed_u8.numel() * 2}; "
         f"element={FP4_ELEMENT_DTYPE_NAME} (4-bit) packed={FP4E2M1X2_PACKED_NAME} "
         f"({FP4E2M1X2_CANN_TYPENAME}); "
-        "device pl.FP4 annotation deferred (no FP4↔UINT8 reinterpret_view)"
+        "device storage pl.FP4E2M1X2; encode/decode via pl.cast ↔ BF16 + MX scales"
     )
 
 

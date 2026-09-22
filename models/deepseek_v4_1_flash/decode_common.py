@@ -173,10 +173,8 @@ def check_program_specs(world_size, specs, spec_names):
     if tuple(spec.name for spec in specs) != tuple(spec_names):
         raise ValueError("Attention specs must match the host parameter names and order")
     # Host MXFP4 cache payloads use torch.float4_e2m1fn_x2 (**FP4E2M1X2**: two
-    # FP4 nibbles per byte). Device kernels still annotate pl.UINT8 physical
-    # layouts until FP4↔UINT8 reinterpret_view exists, so the packed carrier
-    # maps to pl.UINT8 here (same byte shape). Scalar pl.FP4 would instead use
-    # logical last-dim doubling (one FP4 element per logical index).
+    # FP4 nibbles per byte). Device kernels annotate pl.FP4E2M1X2 with the same
+    # physical last dim; encode/decode use pl.cast ↔ BF16 plus MX group scales.
     dtypes = {
         torch.bfloat16: pl.BF16,
         torch.float32: pl.FP32,
@@ -188,7 +186,7 @@ def check_program_specs(world_size, specs, spec_names):
     }
     fp4e2m1x2 = getattr(torch, "float4_e2m1fn_x2", None)
     if fp4e2m1x2 is not None:
-        dtypes[fp4e2m1x2] = pl.UINT8
+        dtypes[fp4e2m1x2] = pl.FP4E2M1X2
     tensors = [spec for spec in specs if isinstance(spec, TensorSpec)]
     return SimpleNamespace(
         **{spec.name: SimpleNamespace(shape=spec.shape, dtype=dtypes[spec.dtype]) for spec in tensors}

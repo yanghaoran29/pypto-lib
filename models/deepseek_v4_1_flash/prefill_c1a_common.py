@@ -82,7 +82,7 @@ SOFTMAX_SCALE = HEAD_DIM**-0.5
 def publish_compressed_cache(
     value: pl.Tensor[[T_DYN, HEAD_DIM], pl.BF16],
     slots: pl.Tensor[[T_DYN], pl.INT64],
-    cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // 2], pl.UINT8],
+    cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // 2], pl.FP4E2M1X2],
     scales: pl.Tensor[
         [CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // COMPRESSED_CACHE_GROUP],
         pl.FP8E4M3FN,
@@ -109,39 +109,11 @@ def publish_compressed_cache(
             stored_scale = pl.cast(raw_scale, pl.FP8E4M3FN, mode="rint")
             scale = pl.cast(stored_scale, pl.FP32)
             normalized = pl.row_expand_div(grouped, scale)
-            normalized = pl.reshape(normalized, [1, HEAD_DIM])
-            magnitude = pl.minimum(pl.abs(normalized), 6.0)
-            lower = pl.cast(
-                pl.add(pl.mul(pl.minimum(magnitude, 2.0), 2.0), 0.4999),
-                pl.INT32,
-                mode="trunc",
+            normalized = pl.minimum(pl.maximum(pl.reshape(normalized, [1, HEAD_DIM]), -6.0), 6.0)
+            payload = pl.cast(
+                pl.cast(normalized, pl.BF16, mode="rint"), pl.FP4E2M1X2, mode="rint"
             )
-            middle = pl.cast(
-                pl.add(pl.minimum(pl.maximum(pl.sub(magnitude, 2.0), 0.0), 2.0), 0.4999),
-                pl.INT32,
-                mode="trunc",
-            )
-            upper = pl.cast(
-                pl.add(pl.mul(pl.maximum(pl.sub(magnitude, 4.0), 0.0), 0.5), 0.4999),
-                pl.INT32,
-                mode="trunc",
-            )
-            payload_codes = pl.add(pl.add(lower, middle), upper)
-            bits = pl.reinterpret_view(normalized, pl.INT32)
-            sign = pl.ands(pl.shrs(bits, 31), 1)
-            payload_codes = pl.add(payload_codes, pl.mul(sign, 8))
-            pair_ids = pl.tile.arange(0, [1, HEAD_DIM // 2], dtype=pl.INT32)
-            low_indices = pl.mul(pair_ids, 2)
-            high_indices = pl.add(low_indices, 1)
-            low_tmp = pl.create_tile([1, HEAD_DIM // 2], dtype=pl.INT32)
-            high_tmp = pl.create_tile([1, HEAD_DIM // 2], dtype=pl.INT32)
-            low = pl.tile.gather(payload_codes, low_indices, low_tmp)
-            high = pl.tile.gather(payload_codes, high_indices, high_tmp)
-            payload_bytes = pl.reshape(
-                pl.cast(pl.add(low, pl.shls(high, 4)), pl.UINT8),
-                [1, HEAD_DIM // 2],
-            )
-            pl.store(payload_bytes, [slot, 0], cache_flat)
+            pl.store(payload, [slot, 0], cache_flat)
             pl.store(
                 pl.reshape(stored_scale, [1, HEAD_DIM // COMPRESSED_CACHE_GROUP]),
                 [slot, 0],
@@ -154,7 +126,7 @@ def publish_compressed_cache(
 def publish_index_cache(
     value: pl.Tensor[[T_DYN, INDEX_DIM], pl.BF16],
     slots: pl.Tensor[[T_DYN], pl.INT64],
-    cache: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // 2], pl.UINT8],
+    cache: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // 2], pl.FP4E2M1X2],
     scales: pl.Tensor[
         [INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // INDEX_CACHE_GROUP],
         pl.FP8E8M0,
@@ -183,39 +155,12 @@ def publish_index_cache(
             normalized = pl.reshape(pl.row_expand_div(grouped, scale), [1, 8 * INDEX_CACHE_GROUP])
             padded = pl.tile.full([1, HEAD_DIM], dtype=pl.FP32, value=0.0)
             padded[:, :8 * INDEX_CACHE_GROUP] = normalized
-            magnitude = pl.minimum(pl.abs(padded), 6.0)
-            lower = pl.cast(
-                pl.add(pl.mul(pl.minimum(magnitude, 2.0), 2.0), 0.4999),
-                pl.INT32,
-                mode="trunc",
+            padded = pl.minimum(pl.maximum(padded, -6.0), 6.0)
+            packed = pl.cast(
+                pl.cast(padded, pl.BF16, mode="rint"), pl.FP4E2M1X2, mode="rint"
             )
-            middle = pl.cast(
-                pl.add(pl.minimum(pl.maximum(pl.sub(magnitude, 2.0), 0.0), 2.0), 0.4999),
-                pl.INT32,
-                mode="trunc",
-            )
-            upper = pl.cast(
-                pl.add(pl.mul(pl.maximum(pl.sub(magnitude, 4.0), 0.0), 0.5), 0.4999),
-                pl.INT32,
-                mode="trunc",
-            )
-            payload_codes = pl.add(pl.add(lower, middle), upper)
-            bits = pl.reinterpret_view(padded, pl.INT32)
-            sign = pl.ands(pl.shrs(bits, 31), 1)
-            payload_codes = pl.add(payload_codes, pl.mul(sign, 8))
-            pair_ids = pl.tile.arange(0, [1, HEAD_DIM // 2], dtype=pl.INT32)
-            low_indices = pl.mul(pair_ids, 2)
-            high_indices = pl.add(low_indices, 1)
-            low_tmp = pl.create_tile([1, HEAD_DIM // 2], dtype=pl.INT32)
-            high_tmp = pl.create_tile([1, HEAD_DIM // 2], dtype=pl.INT32)
-            low = pl.tile.gather(payload_codes, low_indices, low_tmp)
-            high = pl.tile.gather(payload_codes, high_indices, high_tmp)
-            packed = pl.reshape(
-                pl.cast(pl.add(low, pl.shls(high, 4)), pl.UINT8),
-                [1, HEAD_DIM // 2],
-            )
-            payload_bytes = pl.tile.slice(packed, [1, INDEX_DIM // 2], [0, 0])
-            pl.store(payload_bytes, [slot, 0], cache_flat)
+            payload = pl.tile.slice(packed, [1, INDEX_DIM // 2], [0, 0])
+            pl.store(payload, [slot, 0], cache_flat)
             exponent_row = pl.reshape(exponent, [1, 8])
             exponent_padded = pl.tile.full([1, 32], dtype=pl.INT32, value=0)
             exponent_padded[:, :8] = exponent_row
@@ -245,7 +190,7 @@ def attend_sparse_cache(
     window_cache: pl.Tensor[[ORI_BLOCKS_DYN, 128, 1, HEAD_DIM], pl.FP8E4M3FN],
     window_scale: pl.Tensor[[ORI_BLOCKS_DYN, 128, 1, HEAD_DIM // 32], pl.FP8E8M0],
     compressed_indices: pl.Tensor[[T_DYN, INDEX_TOPK], pl.INT32],
-    compressed_cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // 2], pl.UINT8],
+    compressed_cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // 2], pl.FP4E2M1X2],
     compressed_scale: pl.Tensor[
         [CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // COMPRESSED_CACHE_GROUP],
         pl.FP8E4M3FN,
@@ -343,39 +288,8 @@ def attend_sparse_cache(
                 row_i32 = pl.read(compressed_indices, [token, index_column])
                 if row_i32 >= 0:
                     row = pl.cast(row_i32, pl.INDEX)
-                    payload_bytes = compressed_flat[row:row + 1, :]
-                    payload_signed = pl.reinterpret_view(payload_bytes, pl.INT8)
-                    payload_i32 = pl.ands(pl.cast(payload_signed, pl.INT32), 255)
-                    low = pl.ands(payload_i32, 15)
-                    high = pl.ands(pl.shrs(payload_i32, 4), 15)
-                    low = pl.reshape(low, [1, HEAD_DIM // 2])
-                    high = pl.reshape(high, [1, HEAD_DIM // 2])
-                    combined_codes = pl.concat(low, high)
-                    output_ids = pl.tile.arange(0, [1, HEAD_DIM], dtype=pl.INT32)
-                    pair_ids = pl.shrs(output_ids, 1)
-                    parity = pl.ands(output_ids, 1)
-                    code_indices = pl.add(pair_ids, pl.mul(parity, HEAD_DIM // 2))
-                    payload_codes = pl.gather(combined_codes, index=code_indices)
-                    magnitude_codes = pl.ands(payload_codes, 7)
-                    magnitude = pl.mul(pl.cast(magnitude_codes, pl.FP32), 0.5)
-                    extra = pl.minimum(pl.maximum(pl.sub(magnitude_codes, 4), 0), 1)
-                    magnitude = pl.add(
-                        magnitude,
-                        pl.mul(pl.cast(extra, pl.FP32), 0.5),
-                    )
-                    extra = pl.minimum(pl.maximum(pl.sub(magnitude_codes, 5), 0), 1)
-                    magnitude = pl.add(
-                        magnitude,
-                        pl.mul(pl.cast(extra, pl.FP32), 0.5),
-                    )
-                    extra = pl.minimum(pl.maximum(pl.sub(magnitude_codes, 6), 0), 1)
-                    magnitude = pl.add(
-                        magnitude,
-                        pl.mul(pl.cast(extra, pl.FP32), 1.5),
-                    )
-                    sign = pl.cast(pl.ands(pl.shrs(payload_codes, 3), 1), pl.FP32)
-                    sign_value = pl.add(pl.mul(sign, -2.0), 1.0)
-                    decoded_payload = pl.mul(magnitude, sign_value)
+                    packed = compressed_flat[row:row + 1, :]
+                    decoded_payload = pl.cast(pl.cast(packed, pl.BF16), pl.FP32)
                     payload = pl.reshape(
                         decoded_payload,
                         [HEAD_DIM // COMPRESSED_CACHE_GROUP, COMPRESSED_CACHE_GROUP],
@@ -455,7 +369,7 @@ def prefill_c1a_partial(
         [ORI_BLOCKS_DYN, 128, 1, HEAD_DIM // WINDOW_CACHE_GROUP],
         pl.FP8E8M0,
     ],
-    compressed_cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // 2], pl.UINT8],
+    compressed_cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // 2], pl.FP4E2M1X2],
     compressed_cache_scale: pl.Tensor[
         [CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // COMPRESSED_CACHE_GROUP],
         pl.FP8E4M3FN,

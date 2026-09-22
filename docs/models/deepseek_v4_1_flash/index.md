@@ -177,12 +177,11 @@ quantized in HBM:
   (currently 4), independent of context length and batch size. Ratio 1 has no
   recurrent compressor state.
 
-Device kernels still annotate these packed payloads as `pl.UINT8` with the
+Device kernels annotate these packed payloads as `pl.FP4E2M1X2` with the
 physical (byte) last dimension. `pl.FP4` is the **scalar** 4-bit element type
-(logical width); `FP4E2M1X2` / `float4_e2m1x2_t` is the **packed** one-byte
-carrier for two FP4 values — they are not the same type. `pl.reinterpret_view`
-does not yet support FP4↔UINT8 aliasing for the nibble publish/decode path, so
-device annotation stays UINT8 this period.
+(logical width); `pl.FP4E2M1X2` / `float4_e2m1x2_t` is the **packed** one-byte
+carrier for two FP4 values — they are not the same type. Cache publish/decode
+uses `pl.cast` between `FP4E2M1X2` and `BF16` plus MX group scales.
 
 Compressed KV and index-key tensors for a source share the same
 `c{ratio}a_cmp_kv` block table. Compressor state uses a separate engine-owned

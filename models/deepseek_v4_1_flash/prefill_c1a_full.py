@@ -216,13 +216,13 @@ def make_prefill_c1a_full(indexer):
         window_indices: pl.Tensor[[C.T_DYN, 128], pl.INT32],
         window_cache: pl.Tensor[[C.ORI_BLOCKS_DYN, 128, 1, C.HEAD_DIM], pl.FP8E4M3FN],
         window_cache_scale: pl.Tensor[[C.ORI_BLOCKS_DYN, 128, 1, C.HEAD_DIM // C.WINDOW_CACHE_GROUP], pl.FP8E8M0],
-        compressed_cache: pl.Tensor[[C.CMP_BLOCKS_DYN, 128, 1, C.HEAD_DIM // 2], pl.UINT8],
+        compressed_cache: pl.Tensor[[C.CMP_BLOCKS_DYN, 128, 1, C.HEAD_DIM // 2], pl.FP4E2M1X2],
         compressed_cache_scale: pl.Tensor[
             [C.CMP_BLOCKS_DYN, 128, 1, C.HEAD_DIM // C.COMPRESSED_CACHE_GROUP], pl.FP8E4M3FN
         ],
         request_ids: pl.Tensor[[C.T_DYN], pl.INT32],
         compressed_lens: pl.Tensor[[C.T_DYN], pl.INT32],
-        index_cache: pl.Tensor[[C.INDEX_BLOCKS_DYN, 128, 1, C.INDEX_DIM // 2], pl.UINT8],
+        index_cache: pl.Tensor[[C.INDEX_BLOCKS_DYN, 128, 1, C.INDEX_DIM // 2], pl.FP4E2M1X2],
         index_cache_scale: pl.Tensor[
             [C.INDEX_BLOCKS_DYN, 128, 1, C.INDEX_DIM // C.INDEX_CACHE_GROUP], pl.FP8E8M0
         ],
@@ -389,7 +389,7 @@ def prefill_c1a_full_test(
         pl.Tensor[[C.ORI_BLOCKS_DYN, 128, 1, C.HEAD_DIM // C.WINDOW_CACHE_GROUP], pl.FP8E8M0]
     ],
     compressed_cache: pl.InOut[
-        pl.Tensor[[C.CMP_BLOCKS_DYN, 128, 1, C.HEAD_DIM // 2], pl.UINT8]
+        pl.Tensor[[C.CMP_BLOCKS_DYN, 128, 1, C.HEAD_DIM // 2], pl.FP4E2M1X2]
     ],
     compressed_cache_scale: pl.InOut[
         pl.Tensor[
@@ -400,7 +400,7 @@ def prefill_c1a_full_test(
     request_ids: pl.Tensor[[C.T_DYN], pl.INT32],
     compressed_lens: pl.Tensor[[C.T_DYN], pl.INT32],
     index_cache: pl.InOut[
-        pl.Tensor[[C.INDEX_BLOCKS_DYN, 128, 1, C.INDEX_DIM // 2], pl.UINT8]
+        pl.Tensor[[C.INDEX_BLOCKS_DYN, 128, 1, C.INDEX_DIM // 2], pl.FP4E2M1X2]
     ],
     index_cache_scale: pl.InOut[
         pl.Tensor[
@@ -479,7 +479,7 @@ def l3_prefill_c1a_full_test(
         ]
     ],
     compressed_cache: pl.InOut[
-        pl.Tensor[[C.TP_SIZE, C.CMP_BLOCKS_DYN, 128, 1, C.HEAD_DIM // 2], pl.UINT8]
+        pl.Tensor[[C.TP_SIZE, C.CMP_BLOCKS_DYN, 128, 1, C.HEAD_DIM // 2], pl.FP4E2M1X2]
     ],
     compressed_cache_scale: pl.InOut[
         pl.Tensor[
@@ -490,7 +490,7 @@ def l3_prefill_c1a_full_test(
     request_ids: pl.Tensor[[C.TP_SIZE, C.T_DYN], pl.INT32],
     compressed_lens: pl.Tensor[[C.TP_SIZE, C.T_DYN], pl.INT32],
     index_cache: pl.InOut[
-        pl.Tensor[[C.TP_SIZE, C.INDEX_BLOCKS_DYN, 128, 1, C.INDEX_DIM // 2], pl.UINT8]
+        pl.Tensor[[C.TP_SIZE, C.INDEX_BLOCKS_DYN, 128, 1, C.INDEX_DIM // 2], pl.FP4E2M1X2]
     ],
     index_cache_scale: pl.InOut[
         pl.Tensor[
