@@ -519,6 +519,12 @@ def c1a_finish(
 
 
 def make_fp4_publish(width, group, scale_dtype, cache_dim):
+    """Build a nibble-pack publisher for FP4E2M1X2 cache rows (two FP4 / byte).
+
+    The cache parameter remains ``pl.UINT8`` with physical width ``width // 2``.
+    Host fixtures use ``float4_e2m1fn_x2`` (FP4E2M1X2) and ``view(uint8)`` at the
+    device boundary until scalar ``pl.FP4`` ↔ UINT8 reinterpret is available.
+    """
     padded_width = max(width, 32 * group)
     is_e8m0 = scale_dtype == pl.FP8E8M0
     byte_dtype = pl.UINT8 if is_e8m0 else pl.INT8
@@ -649,6 +655,7 @@ FP4_MIDPOINT_CODES = {0.25: 0, 0.75: 2, 1.25: 2, 1.75: 4, 2.5: 4, 3.5: 6, 5.0: 6
 
 def check_fp4_boundaries():
     """CPU check of the E2M1 midpoint rule; returns the failure count."""
+    from models.deepseek_v4_1_flash._fp4_abi import as_fp4e2m1x2_uint8
     from models.deepseek_v4_1_flash.quantization import FP4_VALUES, quantize_mxfp4_cache
 
     magnitudes = [sign * value for value in FP4_MIDPOINT_CODES for sign in (1.0, -1.0)]
@@ -657,12 +664,13 @@ def check_fp4_boundaries():
     rows[:, 1] = torch.tensor([value * 0.5 for value in magnitudes], dtype=torch.float32).to(torch.bfloat16)
     reference, _, _ = _reference_fp4(rows, 32, "e8m0")
     public, _ = quantize_mxfp4_cache(rows, 32, "e8m0")
+    public_u8 = as_fp4e2m1x2_uint8(public)
     failures = 0
     for index, magnitude in enumerate(magnitudes):
         code = int(reference[index, 0]) >> 4
         sign = code >> 3
         want = FP4_MIDPOINT_CODES[abs(magnitude)] | (sign << 3)
-        other = int(public[index, 0]) >> 4
+        other = int(public_u8[index, 0]) >> 4
         differs = "helper-toward-zero" if other != code else "same"
         if code != want:
             failures += 1
@@ -820,9 +828,12 @@ def official_reference_c1a(**args):
     slots = a["window_slots"][valid].long()
     window.flatten(0, 1)[slots, 0] = wp[valid]
     window_scale.flatten(0, 1)[slots, 0] = encode_e8m0(ws)[valid]
-    compressed = a["compressed_cache"].view(torch.uint8).clone()
+    # Work in uint8 for nibble writes from _reference_fp4; return FP4E2M1X2 carriers.
+    from models.deepseek_v4_1_flash._fp4_abi import as_fp4e2m1x2_payload, as_fp4e2m1x2_uint8
+
+    compressed = as_fp4e2m1x2_uint8(a["compressed_cache"]).clone()
     compressed_scale = a["compressed_cache_scale"].clone()
-    index = None if a["index_cache"] is None else a["index_cache"].view(torch.uint8).clone()
+    index = None if a["index_cache"] is None else as_fp4e2m1x2_uint8(a["index_cache"]).clone()
     index_scale = None if a["index_cache_scale"] is None else a["index_cache_scale"].view(torch.uint8).clone()
     mode = a["mode"]
     if mode == AttentionMode.FULL:
@@ -868,8 +879,18 @@ def official_reference_c1a(**args):
     # The device writes the grouped projection as BF16 after one FP32 accumulation.
     latent = _bf16_grouped(grouped, a["wo_a"])
     output = _reference_linear(latent.flatten(-2), a["wo_b"], a["wo_b_scale"])
-    return AttentionGoldenResult(output, window, window_scale, compressed, compressed_scale,
-                                 index, index_scale, None, topk, candidates)
+    return AttentionGoldenResult(
+        output,
+        window,
+        window_scale,
+        as_fp4e2m1x2_payload(compressed),
+        compressed_scale,
+        None if index is None else as_fp4e2m1x2_payload(index),
+        index_scale,
+        None,
+        topk,
+        candidates,
+    )
 
 
 project_index_query = make_mx_projection_with_deps(Q_LORA, INDEX_H * INDEX_DIM)
@@ -1750,8 +1771,10 @@ def build_validation_values(mode, tokens, pages, seed=17, case="random"):
     cc, cs = quantize_mxfp4_cache(
         torch.randn(1, PAGES, 128, 1, HEAD_DIM).expand(RANKS, -1, -1, -1, -1).contiguous(), 16, "e4m3"
     )
+    from models.deepseek_v4_1_flash._fp4_abi import as_fp4e2m1x2_uint8
+
     values["window_cache"], values["window_cache_scale"] = wc, ws.view(torch.float8_e8m0fnu)
-    values["compressed_cache"], values["compressed_cache_scale"] = cc, cs
+    values["compressed_cache"], values["compressed_cache_scale"] = as_fp4e2m1x2_uint8(cc), cs
     values["output"] = torch.zeros(RANKS, TOKENS, D, dtype=torch.bfloat16)
     values["index_wq_b"] = torch.randn(RANKS, Q_LORA, INDEX_H * INDEX_DIM).to(torch.float8_e4m3fn)
     values["index_wq_b_scale"] = pack_mx_b_scale(

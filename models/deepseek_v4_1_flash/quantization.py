@@ -12,6 +12,8 @@ import math
 
 import torch
 
+from models.deepseek_v4_1_flash._fp4_abi import as_fp4e2m1x2_payload
+from models.deepseek_v4_1_flash._fp4_abi import as_fp4e2m1x2_uint8
 from models.deepseek_v4_1_flash.config import MX_GROUP
 
 
@@ -59,7 +61,7 @@ def unpack_mx_b_scale(scale: torch.Tensor) -> torch.Tensor:
 
 def dequantize_mxfp4(packed_weight: torch.Tensor, scale_e8m0: torch.Tensor) -> torch.Tensor:
     """Decode checkpoint MXFP4 directly into an FP32 output-major matrix."""
-    packed = packed_weight.contiguous().view(torch.uint8)
+    packed = as_fp4e2m1x2_uint8(packed_weight)
     low = packed & 0x0F
     high = (packed >> 4) & 0x0F
     indices = torch.stack((low, high), dim=-1).flatten(-2)
@@ -83,13 +85,19 @@ def _pack_fp4(indices: torch.Tensor) -> torch.Tensor:
 
 
 def _unpack_fp4(payload: torch.Tensor) -> torch.Tensor:
-    packed = payload.contiguous().view(torch.uint8)
+    packed = as_fp4e2m1x2_uint8(payload)
     indices = torch.stack((packed & 0x0F, (packed >> 4) & 0x0F), dim=-1).flatten(-2)
     return FP4_VALUES.to(payload.device)[indices.to(torch.long)]
 
 
 def quantize_mxfp4_weight(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Quantize output-major ``[..., N, K]`` weights to checkpoint MXFP4 carriers."""
+    """Quantize output-major ``[..., N, K]`` weights to checkpoint MXFP4 carriers.
+
+    Returns a packed **FP4E2M1X2** payload (``torch.float4_e2m1fn_x2``, physical
+    last dim = ``K/2``: two FP4 nibbles per byte) and UE8M0 scales. MoE device
+    prep still expands to MXFP8 via :func:`prepare_routed_weight_for_device`
+    (no on-chip FP4 cast this period).
+    """
     if weight.shape[-1] % MX_GROUP:
         raise ValueError("MXFP4 weights require K divisible by 32")
     grouped = weight.float().unflatten(-1, (-1, MX_GROUP))
@@ -97,7 +105,7 @@ def quantize_mxfp4_weight(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Ten
     exponent = torch.ceil(torch.log2((amax / 6.0).clamp_min(2.0**-127)))
     scale = torch.exp2(exponent.clamp(-127, 128))
     normalized = (grouped / scale.unsqueeze(-1)).clamp(-6.0, 6.0)
-    payload = _pack_fp4(_nearest_fp4_indices(normalized).flatten(-2))
+    payload = as_fp4e2m1x2_payload(_pack_fp4(_nearest_fp4_indices(normalized).flatten(-2)))
     return payload, encode_e8m0(scale)
 
 
@@ -107,20 +115,21 @@ def prepare_routed_weight_for_device(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Convert checkpoint routed FP4 weights into the A5 NPU MXFP8 RHS ABI.
 
-    The input comes from a packed MXFP4 checkpoint with logical shape
-    ``[..., out, in]``, while ``pl.matmul_mx`` requires an ``[..., in, out]`` RHS.
+    The input comes from a packed MXFP4 checkpoint (``uint8`` or
+    **FP4E2M1X2** ``float4_e2m1fn_x2``) with logical shape ``[..., out, in]``,
+    while ``pl.matmul_mx`` requires an ``[..., in, out]`` RHS.
 
     The PyPTO high-level API does not support ``FP8 activation x FP4 RHS``, so the
     FP4 decode, logical transpose, MX_B_NN scale reordering and FP8 quantisation
     all happen at checkpoint/weight-load time. This only prepares persistent device
     weights on the host; it is not a production kernel path that expands the full
-    weight to FP32.
+    weight to FP32. On-chip FP4→FP8 tile cast (#1287) is deferred.
 
     Returns:
         ``device_weight``: ``[..., in, out]`` FP8E4M3FN weights;
         ``device_scale``: ``[..., in/32, out]`` E8M0 scales in MX_B_NN physical order.
     """
-    logical_out_in = dequantize_mxfp4(packed_weight_fp4, scale_e8m0)
+    logical_out_in = dequantize_mxfp4(as_fp4e2m1x2_payload(packed_weight_fp4), scale_e8m0)
     if logical_out_in.shape[-1] % MX_GROUP:
         raise ValueError("routed FP4 input dimension must be divisible by MX group size")
 
@@ -164,7 +173,11 @@ def dequantize_mxfp8_cache(payload: torch.Tensor, scale_e8m0: torch.Tensor) -> t
 def quantize_mxfp4_cache(
     value: torch.Tensor, group_size: int, scale_format: str
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Quantize the last dimension to packed E2M1 with E4M3 or E8M0 scales."""
+    """Quantize the last dimension to packed E2M1 with E4M3 or E8M0 scales.
+
+    Payload dtype is **FP4E2M1X2** (``torch.float4_e2m1fn_x2``): one byte holds
+    two FP4 (4-bit E2M1) values; physical last dimension is ``logical/2``.
+    """
     if value.shape[-1] % group_size:
         raise ValueError(f"MXFP4 cache width must be divisible by {group_size}")
     grouped = value.float().unflatten(-1, (-1, group_size))
@@ -180,7 +193,7 @@ def quantize_mxfp4_cache(
     else:
         raise ValueError(f"unsupported MXFP4 cache scale format {scale_format!r}")
     normalized = (grouped / scale_value.unsqueeze(-1)).clamp(-6.0, 6.0)
-    payload = _pack_fp4(_nearest_fp4_indices(normalized).flatten(-2))
+    payload = as_fp4e2m1x2_payload(_pack_fp4(_nearest_fp4_indices(normalized).flatten(-2)))
     return payload, stored_scale
 
 
@@ -190,7 +203,10 @@ def dequantize_mxfp4_cache(
     group_size: int,
     scale_format: str,
 ) -> torch.Tensor:
-    """Decode a packed E2M1 cache tensor with last-dimension MX groups."""
+    """Decode a packed E2M1 cache tensor with last-dimension MX groups.
+
+    ``payload`` may be **FP4E2M1X2** (``float4_e2m1fn_x2``) or legacy ``uint8``.
+    """
     if scale_format == "e8m0":
         scale_value = decode_e8m0(scale)
     elif scale_format == "e4m3":

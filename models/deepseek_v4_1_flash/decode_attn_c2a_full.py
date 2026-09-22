@@ -272,6 +272,8 @@ def permute_index_query(
 def publish_compressed(
     latent: pl.Tensor[[T_DYN, HEAD_DIM], pl.BF16],
     slots: pl.Tensor[[T_DYN], pl.INT64],
+    # Physical UINT8 layout for nibble codec; host ABI is FP4E2M1X2
+    # (torch.float4_e2m1fn_x2: two FP4 / byte), not scalar pl.FP4.
     cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, CMP_PACKED], pl.UINT8],
     scales: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, CMP_SCALES], pl.FP8E4M3FN],
     num_tokens: pl.Scalar[pl.INT32],
@@ -1026,10 +1028,13 @@ __all__ = ["golden_decode_attn_c2a_full", "decode_attn_c2a_full", "c2a_full_part
 # MXFP4 re-quantization is not byte-idempotent: an E8M0 group whose largest nibble is 3 re-derives a
 # scale one binade lower, moving the bytes while the decoded values stay put.
 #
-# Cache ABI: compressed-KV and index payloads are PACKED E2M1, two logical values per byte with
-# logical element 2i in the LOW nibble, so the stored last dimension is half the logical width --
-# what quantize_mxfp4_cache emits and dequantize_mxfp4_cache consumes, and the deliberate
-# correction of the scaffold's pl.FP4 annotation, which spells the logical width.
+# Cache ABI: compressed-KV and index payloads store **FP4** (4-bit E2M1) values
+# packed as **FP4E2M1X2** (two FP4 per byte, low nibble = logical element 2i).
+# Host carrier: ``torch.float4_e2m1fn_x2``. Device kernels still annotate
+# ``pl.UINT8`` with the physical last dimension because ``pl.reinterpret_view``
+# cannot yet alias scalar ``pl.FP4`` (logical width) ↔ UINT8 for the nibble
+# codec. Do not equate ``pl.FP4`` with FP4E2M1X2 — the former is one element,
+# the latter is the packed byte.
 #
 # Arithmetic ABI: BF16_GEMM and PV_DTYPE pin the two places where CPU torch and the A5 Cube
 # disagree.  Both default to what the device and decode_swa.official_reference do, and both differ
@@ -1422,6 +1427,11 @@ def make_c2a_inputs(tokens=24, requests=6, seed=17, case="mixed", mode="decode")
         IDX_GROUP,
         "e8m0",
     )
+    from models.deepseek_v4_1_flash._fp4_abi import as_fp4e2m1x2_uint8
+
+    # Device kernels still take physical UINT8; host quantize emits FP4E2M1X2.
+    compressed_cache = as_fp4e2m1x2_uint8(compressed_cache)
+    index_cache = as_fp4e2m1x2_uint8(index_cache)
 
     values = {
         "x": torch.randn(tokens, C.D, generator=gen).bfloat16(),
