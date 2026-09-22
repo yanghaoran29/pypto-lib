@@ -384,7 +384,7 @@ def c1a_prepare(
 def gather_combined(
     window_cache: pl.Tensor[[ORI_BLOCKS_DYN, 128, 1, HEAD_DIM], pl.FP8E4M3FN],
     window_scale: pl.Tensor[[ORI_BLOCKS_DYN, 128, 1, HEAD_DIM // 32], pl.FP8E8M0],
-    compressed_cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // 2], pl.UINT8],
+    compressed_cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // 2], pl.FP4E2M1X2],
     compressed_scale: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // 16], pl.FP8E4M3FN],
     window_indices: pl.Tensor[[T_DYN, 128], pl.INT32],
     compressed_indices: pl.Tensor[[T_DYN, INDEX_TOPK], pl.INT32],
@@ -397,8 +397,8 @@ def gather_combined(
     compressed_rows = pl.tensor.dim(compressed_cache, 0) * 128
     flat_window = pl.reshape(window_cache, [window_rows, HEAD_DIM])
     flat_window_scale = pl.reshape(window_scale, [window_rows, HEAD_DIM // 32])
-    # Cache addressing remains in packed byte carriers.
-    flat_compressed = pl.reshape(compressed_cache, [1, compressed_rows * (HEAD_DIM // 2)])
+    # FP4E2M1X2 GM carrier; decode via pl.cast → BF16 (2:1) then MX group scales.
+    flat_compressed = pl.reshape(compressed_cache, [compressed_rows, HEAD_DIM // 2])
     flat_compressed_scale = pl.reshape(compressed_scale, [compressed_rows, HEAD_DIM // 16])
     selected_rows = pl.tensor.dim(selected, 0) * 640
     flat_selected = pl.reshape(selected, [selected_rows, HEAD_DIM])
@@ -434,24 +434,8 @@ def gather_combined(
                         pl.store(pl.cast(decoded_window, pl.BF16, mode="rint"),
                                  [destination, 0], flat_selected)
                     else:
-                        packed_row = pl.slice(flat_compressed, [1, HEAD_DIM // 2],
-                                             [0, physical * (HEAD_DIM // 2)])
-                        byte_values = pl.ands(pl.cast(pl.reinterpret_view(packed_row, pl.INT8), pl.INT32), 255)
-                        low = pl.ands(byte_values, 15)
-                        high = pl.shrs(byte_values, 4)
-                        # The mask-form tile scatter drops the even lanes on A5, so the
-                        # halves go through the tensor form.
-                        carrier = pl.create_tensor([1, HEAD_DIM], dtype=pl.INT32)
-                        placed_low = pl.tensor.scatter(low, mask_pattern=pl.tile.MaskPattern.P0101, dst=carrier)
-                        placed = pl.tensor.scatter(high, mask_pattern=pl.tile.MaskPattern.P1010, dst=placed_low)
-                        magnitude_code = pl.cast(pl.ands(placed, 7), pl.FP32)
-                        magnitude = pl.add(pl.mul(pl.minimum(magnitude_code, 4.0), 0.5),
-                                           pl.add(pl.maximum(pl.sub(magnitude_code, 4.0), 0.0),
-                                                  pl.maximum(pl.sub(magnitude_code, 6.0), 0.0)))
-                        bits = pl.or_(
-                            pl.reinterpret_view(magnitude, pl.INT32), pl.shls(pl.ands(placed, 8), 28)
-                        )
-                        decoded_value = pl.cast(pl.reinterpret_view(bits, pl.FP32), pl.BF16)
+                        packed_row = pl.load(flat_compressed, [physical, 0], [1, HEAD_DIM // 2])
+                        decoded_value = pl.cast(packed_row, pl.BF16)
                         compressed_factors = pl.cast(
                             pl.slice(flat_compressed_scale, [1, HEAD_DIM // 16], [physical, 0]), pl.FP32
                         )
@@ -474,7 +458,7 @@ def c1a_finish(
     query: pl.Tensor[[T_DYN, LOCAL_H * HEAD_DIM], pl.BF16],
     window_cache: pl.Tensor[[ORI_BLOCKS_DYN, 128, 1, HEAD_DIM], pl.FP8E4M3FN],
     window_scale: pl.Tensor[[ORI_BLOCKS_DYN, 128, 1, HEAD_DIM // 32], pl.FP8E8M0],
-    compressed_cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // 2], pl.UINT8],
+    compressed_cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // 2], pl.FP4E2M1X2],
     compressed_scale: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // 16], pl.FP8E4M3FN],
     window_indices: pl.Tensor[[T_DYN, 128], pl.INT32],
     compressed_indices: pl.Tensor[[T_DYN, INDEX_TOPK], pl.INT32],
@@ -519,6 +503,11 @@ def c1a_finish(
 
 
 def make_fp4_publish(width, group, scale_dtype, cache_dim):
+    """Build an MXFP4 publisher that stores ``pl.FP4E2M1X2`` cache rows.
+
+    Cache storage is ``pl.FP4E2M1X2`` with physical width ``width // 2``. After
+    group scale + normalize, payload is written via ``pl.cast(..., pl.FP4E2M1X2)``.
+    """
     padded_width = max(width, 32 * group)
     is_e8m0 = scale_dtype == pl.FP8E8M0
     byte_dtype = pl.UINT8 if is_e8m0 else pl.INT8
@@ -527,7 +516,7 @@ def make_fp4_publish(width, group, scale_dtype, cache_dim):
     def publish(
         source: pl.Tensor[[T_DYN, width], pl.BF16],
         slots: pl.Tensor[[T_DYN], pl.INT64],
-        cache: pl.Tensor[[cache_dim, 128, 1, width // 2], pl.UINT8],
+        cache: pl.Tensor[[cache_dim, 128, 1, width // 2], pl.FP4E2M1X2],
         scales: pl.Tensor[[cache_dim, 128, 1, width // group], scale_dtype],
         num_tokens: pl.Scalar[pl.INT32],
         cache_ready: pl.Scalar[pl.TASK_ID],
@@ -562,45 +551,12 @@ def make_fp4_publish(width, group, scale_dtype, cache_dim):
                         stored_codes = pl.cast(pl.reinterpret_view(stored_e4m3, pl.INT8), pl.INT32)
                         factors = pl.cast(stored_e4m3, pl.FP32)
                     normalized = pl.minimum(pl.maximum(pl.row_expand_div(values, factors), -6.0), 6.0)
-                    magnitude = pl.abs(normalized)
-                    rounded = pl.tile.full([padded_width // group, group], dtype=pl.FP32, value=0.0)
-                    select_tmp = pl.tile.create([1, 16], dtype=pl.UINT32)
-                    predicate = pl.tile.cmps(magnitude, 0.25, cmp_type=4)
-                    level = pl.tile.full([padded_width // group, group], dtype=pl.FP32, value=0.5)
-                    rounded = pl.tile.sel(predicate, level, rounded, select_tmp)
-                    predicate = pl.tile.cmps(magnitude, 0.75, cmp_type=5)
-                    level = pl.tile.full([padded_width // group, group], dtype=pl.FP32, value=1.0)
-                    rounded = pl.tile.sel(predicate, level, rounded, select_tmp)
-                    predicate = pl.tile.cmps(magnitude, 1.25, cmp_type=4)
-                    level = pl.tile.full([padded_width // group, group], dtype=pl.FP32, value=1.5)
-                    rounded = pl.tile.sel(predicate, level, rounded, select_tmp)
-                    predicate = pl.tile.cmps(magnitude, 1.75, cmp_type=5)
-                    level = pl.tile.full([padded_width // group, group], dtype=pl.FP32, value=2.0)
-                    rounded = pl.tile.sel(predicate, level, rounded, select_tmp)
-                    predicate = pl.tile.cmps(magnitude, 2.5, cmp_type=4)
-                    level = pl.tile.full([padded_width // group, group], dtype=pl.FP32, value=3.0)
-                    rounded = pl.tile.sel(predicate, level, rounded, select_tmp)
-                    predicate = pl.tile.cmps(magnitude, 3.5, cmp_type=5)
-                    level = pl.tile.full([padded_width // group, group], dtype=pl.FP32, value=4.0)
-                    rounded = pl.tile.sel(predicate, level, rounded, select_tmp)
-                    predicate = pl.tile.cmps(magnitude, 5.0, cmp_type=4)
-                    level = pl.tile.full([padded_width // group, group], dtype=pl.FP32, value=6.0)
-                    rounded = pl.tile.sel(predicate, level, rounded, select_tmp)
-                    # Convert the exact RNE levels to E2M1 codes, then pack adjacent lanes.
-                    codes = pl.add(pl.minimum(pl.mul(rounded, 2.0), 4.0),
-                                   pl.minimum(pl.maximum(pl.sub(rounded, 2.0), 0.0), 3.0))
-                    sign = pl.ands(pl.shrs(pl.reinterpret_view(normalized, pl.INT32), 28), 8)
-                    codes = pl.reshape(pl.or_(pl.cast(codes, pl.INT32), sign), [1, padded_width])
-                    low = pl.tile.gather_mask(
-                        codes, mask_pattern=pl.tile.MaskPattern.P0101, output_dtype=pl.INT32
+                    norm_row = pl.set_validshape(
+                        pl.reshape(normalized, [1, padded_width]), 1, width
                     )
-                    high = pl.tile.gather_mask(
-                        codes, mask_pattern=pl.tile.MaskPattern.P1010, output_dtype=pl.INT32
+                    payload = pl.cast(
+                        pl.cast(norm_row, pl.BF16, mode="rint"), pl.FP4E2M1X2, mode="rint"
                     )
-                    packed = pl.add(low, pl.mul(high, 16))
-                    signed_bytes = pl.sub(packed, pl.mul(pl.shrs(packed, 7), 256))
-                    payload_bytes = pl.reinterpret_view(pl.cast(signed_bytes, pl.INT8), pl.UINT8)
-                    payload = pl.set_validshape(payload_bytes, 1, width // 2)
                     encoded_codes = pl.reinterpret_view(pl.cast(stored_codes, byte_dtype), scale_dtype)
                     encoded = pl.set_validshape(pl.reshape(encoded_codes, [1, padded_width // group]),
                                                 1, width // group)
@@ -649,6 +605,7 @@ FP4_MIDPOINT_CODES = {0.25: 0, 0.75: 2, 1.25: 2, 1.75: 4, 2.5: 4, 3.5: 6, 5.0: 6
 
 def check_fp4_boundaries():
     """CPU check of the E2M1 midpoint rule; returns the failure count."""
+    from models.deepseek_v4_1_flash._fp4_abi import as_fp4e2m1x2_uint8
     from models.deepseek_v4_1_flash.quantization import FP4_VALUES, quantize_mxfp4_cache
 
     magnitudes = [sign * value for value in FP4_MIDPOINT_CODES for sign in (1.0, -1.0)]
@@ -657,12 +614,13 @@ def check_fp4_boundaries():
     rows[:, 1] = torch.tensor([value * 0.5 for value in magnitudes], dtype=torch.float32).to(torch.bfloat16)
     reference, _, _ = _reference_fp4(rows, 32, "e8m0")
     public, _ = quantize_mxfp4_cache(rows, 32, "e8m0")
+    public_u8 = as_fp4e2m1x2_uint8(public)
     failures = 0
     for index, magnitude in enumerate(magnitudes):
         code = int(reference[index, 0]) >> 4
         sign = code >> 3
         want = FP4_MIDPOINT_CODES[abs(magnitude)] | (sign << 3)
-        other = int(public[index, 0]) >> 4
+        other = int(public_u8[index, 0]) >> 4
         differs = "helper-toward-zero" if other != code else "same"
         if code != want:
             failures += 1
@@ -820,9 +778,12 @@ def official_reference_c1a(**args):
     slots = a["window_slots"][valid].long()
     window.flatten(0, 1)[slots, 0] = wp[valid]
     window_scale.flatten(0, 1)[slots, 0] = encode_e8m0(ws)[valid]
-    compressed = a["compressed_cache"].view(torch.uint8).clone()
+    # Host golden packs via uint8 nibble helpers; return FP4E2M1X2 carriers.
+    from models.deepseek_v4_1_flash._fp4_abi import as_fp4e2m1x2_payload, as_fp4e2m1x2_uint8
+
+    compressed = as_fp4e2m1x2_uint8(a["compressed_cache"]).clone()
     compressed_scale = a["compressed_cache_scale"].clone()
-    index = None if a["index_cache"] is None else a["index_cache"].view(torch.uint8).clone()
+    index = None if a["index_cache"] is None else as_fp4e2m1x2_uint8(a["index_cache"]).clone()
     index_scale = None if a["index_cache_scale"] is None else a["index_cache_scale"].view(torch.uint8).clone()
     mode = a["mode"]
     if mode == AttentionMode.FULL:
@@ -868,8 +829,18 @@ def official_reference_c1a(**args):
     # The device writes the grouped projection as BF16 after one FP32 accumulation.
     latent = _bf16_grouped(grouped, a["wo_a"])
     output = _reference_linear(latent.flatten(-2), a["wo_b"], a["wo_b_scale"])
-    return AttentionGoldenResult(output, window, window_scale, compressed, compressed_scale,
-                                 index, index_scale, None, topk, candidates)
+    return AttentionGoldenResult(
+        output,
+        window,
+        window_scale,
+        as_fp4e2m1x2_payload(compressed),
+        compressed_scale,
+        None if index is None else as_fp4e2m1x2_payload(index),
+        index_scale,
+        None,
+        topk,
+        candidates,
+    )
 
 
 project_index_query = make_mx_projection_with_deps(Q_LORA, INDEX_H * INDEX_DIM)
@@ -940,46 +911,21 @@ def quantize_index_query(
 
 @pl.jit.inline
 def decode_index_keys(
-    cache: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // 2], pl.UINT8],
+    cache: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // 2], pl.FP4E2M1X2],
     scales: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // 32], pl.FP8E8M0],
     decoded: pl.Tensor[[INDEX_BLOCKS_DYN, 128, INDEX_DIM], pl.BF16],
     entry_ready: pl.Scalar[pl.TASK_ID],
 ):
     rows = pl.tensor.dim(cache, 0) * 128
-    # Keep packed byte offsets explicit at the FP4 GM boundary.
-    flat = pl.reshape(cache, [1, rows * (INDEX_DIM // 2)])
+    # FP4E2M1X2 physical rows; cast expands last dim 2:1 to logical INDEX_DIM.
+    flat = pl.reshape(cache, [rows, INDEX_DIM // 2])
     scale_flat = pl.reshape(scales, [rows, INDEX_DIM // 32])
     output = pl.reshape(decoded, [rows, INDEX_DIM])
     with pl.spmd(32, name_hint="c1a_decode_index_keys", deps=[entry_ready]) as keys_tid:
         worker = pl.tile.get_block_idx()
         for row in pl.range(worker, rows, 32):
-            packed_row = pl.slice(flat, [1, INDEX_DIM // 2], [0, row * (INDEX_DIM // 2)])
-            byte_values = pl.ands(pl.cast(pl.reinterpret_view(packed_row, pl.INT8), pl.INT32), 255)
-            low = pl.ands(byte_values, 15)
-            high = pl.shrs(byte_values, 4)
-            low_code = pl.cast(pl.ands(low, 7), pl.FP32)
-            high_code = pl.cast(pl.ands(high, 7), pl.FP32)
-            low_magnitude = pl.add(pl.mul(pl.minimum(low_code, 4.0), 0.5),
-                                   pl.add(pl.maximum(pl.sub(low_code, 4.0), 0.0),
-                                          pl.maximum(pl.sub(low_code, 6.0), 0.0)))
-            high_magnitude = pl.add(pl.mul(pl.minimum(high_code, 4.0), 0.5),
-                                    pl.add(pl.maximum(pl.sub(high_code, 4.0), 0.0),
-                                           pl.maximum(pl.sub(high_code, 6.0), 0.0)))
-            low_value = pl.reinterpret_view(
-                pl.or_(pl.reinterpret_view(low_magnitude, pl.INT32), pl.shls(pl.ands(low, 8), 28)),
-                pl.FP32,
-            )
-            high_value = pl.reinterpret_view(
-                pl.or_(pl.reinterpret_view(high_magnitude, pl.INT32), pl.shls(pl.ands(high, 8), 28)),
-                pl.FP32,
-            )
-            # The mask-form tile scatter drops the even lanes on A5; the tensor form
-            # places both halves.
-            interleaved = pl.full([1, INDEX_DIM], dtype=pl.FP32, value=0.0)
-            interleaved = pl.tensor.scatter(low_value, mask_pattern=pl.tile.MaskPattern.P0101,
-                                            dst=interleaved)
-            interleaved = pl.tensor.scatter(high_value, mask_pattern=pl.tile.MaskPattern.P1010,
-                                            dst=interleaved)
+            packed_row = pl.load(flat, [row, 0], [1, INDEX_DIM // 2])
+            interleaved = pl.cast(pl.cast(packed_row, pl.BF16), pl.FP32)
             raw = pl.load(scale_flat, [row, 0], [1, 32], valid_shape=[1, INDEX_DIM // 32])
             signed = pl.cast(pl.reinterpret_view(pl.reinterpret_view(raw, pl.UINT8), pl.INT8), pl.INT32)
             codes = pl.ands(signed, 255)
@@ -1146,7 +1092,7 @@ def c1a_index(
     index_weights_proj: pl.Tensor[[D, INDEX_H], pl.BF16],
     cos: pl.Tensor[[T_DYN, ROPE_DIM // 2], pl.FP32],
     sin: pl.Tensor[[T_DYN, ROPE_DIM // 2], pl.FP32],
-    index_cache: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // 2], pl.UINT8],
+    index_cache: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // 2], pl.FP4E2M1X2],
     index_cache_scale: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // 32], pl.FP8E8M0],
     num_tokens: pl.Scalar[pl.INT32],
     score_width: pl.Scalar[pl.INDEX],
@@ -1450,13 +1396,13 @@ def decode_attn_c1a_full(
     window_indices: pl.Tensor[[T_DYN, 128], pl.INT32],
     window_cache: pl.Tensor[[ORI_BLOCKS_DYN, 128, 1, HEAD_DIM], pl.FP8E4M3FN],
     window_cache_scale: pl.Tensor[[ORI_BLOCKS_DYN, 128, 1, HEAD_DIM // WINDOW_CACHE_GROUP], pl.FP8E8M0],
-    compressed_cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // 2], pl.UINT8],
+    compressed_cache: pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // 2], pl.FP4E2M1X2],
     compressed_cache_scale: pl.Tensor[
         [CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // COMPRESSED_CACHE_GROUP], pl.FP8E4M3FN
     ],
     request_ids: pl.Tensor[[T_DYN], pl.INT32],
     compressed_lens: pl.Tensor[[T_DYN], pl.INT32],
-    index_cache: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // 2], pl.UINT8],
+    index_cache: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // 2], pl.FP4E2M1X2],
     index_cache_scale: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // INDEX_CACHE_GROUP], pl.FP8E8M0],
     index_block_table: pl.Tensor[[B_DYN, TABLE_DYN], pl.INT32],
     compressed_rope_cos: pl.Tensor[[T_DYN, ROPE_DIM // 2], pl.FP32],
@@ -1566,13 +1512,13 @@ def decode_attn_c1a_full_test(
     window_cache_scale: pl.InOut[
         pl.Tensor[[ORI_BLOCKS_DYN, 128, 1, HEAD_DIM // WINDOW_CACHE_GROUP], pl.FP8E8M0]
     ],
-    compressed_cache: pl.InOut[pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // 2], pl.UINT8]],
+    compressed_cache: pl.InOut[pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // 2], pl.FP4E2M1X2]],
     compressed_cache_scale: pl.InOut[
         pl.Tensor[[CMP_BLOCKS_DYN, 128, 1, HEAD_DIM // COMPRESSED_CACHE_GROUP], pl.FP8E4M3FN]
     ],
     request_ids: pl.Tensor[[T_DYN], pl.INT32],
     compressed_lens: pl.Tensor[[T_DYN], pl.INT32],
-    index_cache: pl.InOut[pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // 2], pl.UINT8]],
+    index_cache: pl.InOut[pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // 2], pl.FP4E2M1X2]],
     index_cache_scale: pl.InOut[
         pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // INDEX_CACHE_GROUP], pl.FP8E8M0]
     ],
@@ -1644,13 +1590,13 @@ def make_program(tokens, pages, epochs=1):
         window_cache_scale: pl.InOut[
             pl.Tensor[[TP_SIZE, PAGES, 128, 1, HEAD_DIM // WINDOW_CACHE_GROUP], pl.FP8E8M0]
         ],
-        compressed_cache: pl.InOut[pl.Tensor[[TP_SIZE, PAGES, 128, 1, HEAD_DIM // 2], pl.UINT8]],
+        compressed_cache: pl.InOut[pl.Tensor[[TP_SIZE, PAGES, 128, 1, HEAD_DIM // 2], pl.FP4E2M1X2]],
         compressed_cache_scale: pl.InOut[
             pl.Tensor[[TP_SIZE, PAGES, 128, 1, HEAD_DIM // COMPRESSED_CACHE_GROUP], pl.FP8E4M3FN]
         ],
         request_ids: pl.Tensor[[TP_SIZE, TOKENS], pl.INT32],
         compressed_lens: pl.Tensor[[TP_SIZE, TOKENS], pl.INT32],
-        index_cache: pl.InOut[pl.Tensor[[TP_SIZE, PAGES, 128, 1, INDEX_DIM // 2], pl.UINT8]],
+        index_cache: pl.InOut[pl.Tensor[[TP_SIZE, PAGES, 128, 1, INDEX_DIM // 2], pl.FP4E2M1X2]],
         index_cache_scale: pl.InOut[
             pl.Tensor[[TP_SIZE, PAGES, 128, 1, INDEX_DIM // INDEX_CACHE_GROUP], pl.FP8E8M0]
         ],
@@ -1750,8 +1696,10 @@ def build_validation_values(mode, tokens, pages, seed=17, case="random"):
     cc, cs = quantize_mxfp4_cache(
         torch.randn(1, PAGES, 128, 1, HEAD_DIM).expand(RANKS, -1, -1, -1, -1).contiguous(), 16, "e4m3"
     )
+    from models.deepseek_v4_1_flash._fp4_abi import as_fp4e2m1x2_payload
+
     values["window_cache"], values["window_cache_scale"] = wc, ws.view(torch.float8_e8m0fnu)
-    values["compressed_cache"], values["compressed_cache_scale"] = cc, cs
+    values["compressed_cache"], values["compressed_cache_scale"] = as_fp4e2m1x2_payload(cc), cs
     values["output"] = torch.zeros(RANKS, TOKENS, D, dtype=torch.bfloat16)
     values["index_wq_b"] = torch.randn(RANKS, Q_LORA, INDEX_H * INDEX_DIM).to(torch.float8_e4m3fn)
     values["index_wq_b_scale"] = pack_mx_b_scale(

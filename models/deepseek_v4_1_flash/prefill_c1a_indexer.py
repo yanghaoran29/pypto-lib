@@ -27,7 +27,6 @@ from models.deepseek_v4_1_flash.attention_ops import K_TILE, M_TILE, make_mx_pro
 INDEX_SCORE_SCALE = INDEX_DIM ** -0.5 * INDEX_H ** -0.5
 INDEX_PAGE = 128
 INDEX_SCORE_TILE = 64
-INDEX_PACKED_ELEMENTS = INDEX_SCORE_TILE * INDEX_DIM // 2
 TOPK_LEAF = 8192
 TOPK_PAIR_WIDTH = 2 * INDEX_TOPK
 TOPK_MAX_LEAVES = (1048576 + TOPK_LEAF - 1) // TOPK_LEAF
@@ -140,7 +139,7 @@ def make_paged_indexer(use_candidates=False, direct_topk=False):
         query_latent: pl.Tensor[[T_DYN, Q_LORA], pl.BF16],
         request_ids: pl.Tensor[[T_DYN], pl.INT32],
         compressed_lens: pl.Tensor[[T_DYN], pl.INT32],
-        index_cache: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // 2], pl.UINT8],
+        index_cache: pl.Tensor[[INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // 2], pl.FP4E2M1X2],
         index_cache_scale: pl.Tensor[
             [INDEX_BLOCKS_DYN, 128, 1, INDEX_DIM // INDEX_CACHE_GROUP],
             pl.FP8E8M0,
@@ -208,54 +207,13 @@ def make_paged_indexer(use_candidates=False, direct_topk=False):
                     if physical_block_i32 >= 0:
                         physical_block = pl.cast(physical_block_i32, pl.INDEX)
                         physical_row = physical_block * INDEX_PAGE + logical_begin % INDEX_PAGE
-                        payload_bytes = pl.load(
+                        packed = pl.load(
                             cache_flat,
                             [physical_row, 0],
                             [INDEX_SCORE_TILE, INDEX_DIM // 2],
                         )
-                        payload_signed = pl.reinterpret_view(payload_bytes, pl.INT8)
-                        payload_i32 = pl.ands(pl.cast(payload_signed, pl.INT32), 255)
-                        low = pl.ands(payload_i32, 15)
-                        high = pl.ands(pl.shrs(payload_i32, 4), 15)
-                        low = pl.reshape(low, [1, INDEX_PACKED_ELEMENTS])
-                        high = pl.reshape(high, [1, INDEX_PACKED_ELEMENTS])
-                        combined_codes = pl.concat(low, high)
-                        output_ids = pl.tile.arange(
-                            0,
-                            [1, INDEX_SCORE_TILE * INDEX_DIM],
-                            dtype=pl.INT32,
-                        )
-                        pair_ids = pl.shrs(output_ids, 1)
-                        parity = pl.ands(output_ids, 1)
-                        code_indices = pl.add(pair_ids, pl.mul(parity, INDEX_PACKED_ELEMENTS))
-                        code_tmp = pl.create_tile([1, INDEX_SCORE_TILE * INDEX_DIM], dtype=pl.INT32)
-                        payload_codes = pl.tile.gather(combined_codes, code_indices, code_tmp)
-                        payload_codes = pl.reshape(
-                            payload_codes,
-                            [INDEX_SCORE_TILE, INDEX_DIM],
-                        )
-                        magnitude_codes = pl.ands(payload_codes, 7)
-                        magnitude = pl.mul(pl.cast(magnitude_codes, pl.FP32), 0.5)
-                        extra = pl.minimum(pl.maximum(pl.sub(magnitude_codes, 4), 0), 1)
-                        magnitude = pl.add(
-                            magnitude,
-                            pl.mul(pl.cast(extra, pl.FP32), 0.5),
-                        )
-                        extra = pl.minimum(pl.maximum(pl.sub(magnitude_codes, 5), 0), 1)
-                        magnitude = pl.add(
-                            magnitude,
-                            pl.mul(pl.cast(extra, pl.FP32), 0.5),
-                        )
-                        extra = pl.minimum(pl.maximum(pl.sub(magnitude_codes, 6), 0), 1)
-                        magnitude = pl.add(
-                            magnitude,
-                            pl.mul(pl.cast(extra, pl.FP32), 1.5),
-                        )
-                        sign = pl.cast(pl.ands(pl.shrs(payload_codes, 3), 1), pl.FP32)
-                        sign_value = pl.add(pl.mul(sign, -2.0), 1.0)
-                        decoded_payload = pl.mul(magnitude, sign_value)
                         payload_fp32 = pl.reshape(
-                            decoded_payload,
+                            pl.cast(pl.cast(packed, pl.BF16), pl.FP32),
                             [INDEX_SCORE_TILE * (INDEX_DIM // INDEX_CACHE_GROUP), INDEX_CACHE_GROUP],
                         )
                         scale_rows = pl.load(

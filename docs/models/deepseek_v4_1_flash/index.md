@@ -161,18 +161,27 @@ quantized in HBM:
 
 - Window KV payload: `[blocks, 128, 1, 512]`, MXFP8 E4M3, with
   `[blocks, 128, 1, 16]` E8M0 group-of-32 scales.
-- Ratio-2 compressed KV payload: logical `[blocks, 128, 1, 512]`, packed
-  MXFP4 E2M1, with `[blocks, 128, 1, 32]` E4M3 group-of-16 scales. Layers 2,
+- Ratio-2 compressed KV payload: logical `[blocks, 128, 1, 512]` of **FP4**
+  (4-bit E2M1) values, stored packed as **FP4E2M1X2** (two FP4 per byte; host
+  `torch.float4_e2m1fn_x2`, physical last dim `256`), with
+  `[blocks, 128, 1, 32]` E4M3 group-of-16 scales. Layers 2,
   8, and 14 own these pools; one physical row represents two original tokens.
-- Ratio-1 compressed KV uses the same packed FP4 payload and scale ABI and is
-  owned by layer 20.
-- Index-key payload: logical `[blocks, 128, 1, 128]`, packed MXFP4 E2M1, with
+- Ratio-1 compressed KV uses the same packed FP4 / FP4E2M1X2 payload and scale
+  ABI and is owned by layer 20.
+- Index-key payload: logical `[blocks, 128, 1, 128]` FP4 elements, packed as
+  FP4E2M1X2 (physical last dim `64`), with
   `[blocks, 128, 1, 4]` E8M0 group-of-32 scales.
 - Ratio-2 recurrent state: `[num_state_blocks, STATE_CAPACITY, 1024]`, FP32.
   Each row stores the token's 512-channel KV projection followed by its
   512-channel gate score. `STATE_CAPACITY` is a model configuration constant
   (currently 4), independent of context length and batch size. Ratio 1 has no
   recurrent compressor state.
+
+Device kernels annotate these packed payloads as `pl.FP4E2M1X2` with the
+physical (byte) last dimension. `pl.FP4` is the **scalar** 4-bit element type
+(logical width); `pl.FP4E2M1X2` / `float4_e2m1x2_t` is the **packed** one-byte
+carrier for two FP4 values — they are not the same type. Cache publish/decode
+uses `pl.cast` between `FP4E2M1X2` and `BF16` plus MX group scales.
 
 Compressed KV and index-key tensors for a source share the same
 `c{ratio}a_cmp_kv` block table. Compressor state uses a separate engine-owned
@@ -267,10 +276,13 @@ supports up to 64 active sequences globally. DSpark execution itself remains
 follow-up work.
 
 Query/output low-rank projections and shared experts use MXFP8 payloads.
-Routed expert weights remain output-major packed MXFP4 with E8M0 group-of-32
-scales in HBM. The planned kernel loads one FP4 tile, casts that tile to FP8 in
-on-chip memory, and uses the supported MXFP8 Cube path with dynamically
-quantized activations; it does not expand the complete expert tensor.
+Routed expert weights remain output-major packed MXFP4 (**FP4** elements in an
+**FP4E2M1X2** host carrier with E8M0 group-of-32 scales) in the checkpoint.
+The **current** device path still expands them to MXFP8 on the host via
+`prepare_routed_weight_for_device` before HBM upload. The planned kernel that
+loads one FP4 tile, casts that tile to FP8 on-chip, and uses the supported
+MXFP8 Cube path is **not implemented yet** (see issue #1287); do not treat
+host-side expansion as that on-chip cast path.
 
 The paged-attention Torch reference accumulates the BF16 compressor, index-key,
 index-weight, and grouped output projections in FP32. Compressor, index-key,

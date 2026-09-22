@@ -262,7 +262,7 @@ FLASH = DeepSeekV41Config(
     quant_method="fp8",
     activation_scheme="dynamic",
     weight_block_size=(32, 32),
-    expert_dtype="fp4",
+    expert_dtype="fp4",  # checkpoint MXFP4 (FP4 elems); host packed carrier FP4E2M1X2
     scale_fmt="ue8m0",
 )
 

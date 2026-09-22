@@ -13,6 +13,7 @@ from collections.abc import Callable
 
 import torch
 
+from models.deepseek_v4_1_flash._fp4_abi import is_fp4e2m1x2_torch_dtype
 from models.deepseek_v4_1_flash.quantization import pack_mx_b_scale
 from models.deepseek_v4_1_flash.quantization import quantize_mxfp4_cache
 from models.deepseek_v4_1_flash.quantization import quantize_mxfp4_weight
@@ -113,20 +114,29 @@ def run_attention_golden(golden_fn: Callable[..., object], ratio: int, mode: str
     ):
         raise RuntimeError("attention golden did not preserve the MXFP8 window-cache ABI")
     if ratio:
-        if result.compressed_cache is None or result.compressed_cache.dtype is not torch.uint8:
-            raise RuntimeError("attention golden did not preserve the packed MXFP4 compressed-cache ABI")
+        if result.compressed_cache is None or not is_fp4e2m1x2_torch_dtype(result.compressed_cache.dtype):
+            raise RuntimeError(
+                "attention golden did not preserve the FP4E2M1X2 packed cache ABI "
+                "(torch.float4_e2m1fn_x2: two FP4 per byte)"
+            )
         if (
             result.compressed_cache_scale is None
             or result.compressed_cache_scale.dtype is not torch.float8_e4m3fn
         ):
             raise RuntimeError("attention golden did not preserve the E4M3 compressed-cache scale ABI")
     if mode in ("full", "reindex"):
-        if result.index_cache is None or result.index_cache.dtype is not torch.uint8:
-            raise RuntimeError("attention golden did not preserve the packed MXFP4 index-cache ABI")
+        if result.index_cache is None or not is_fp4e2m1x2_torch_dtype(result.index_cache.dtype):
+            raise RuntimeError(
+                "attention golden did not preserve the FP4E2M1X2 packed index-cache ABI "
+                "(torch.float4_e2m1fn_x2: two FP4 per byte)"
+            )
         if result.index_cache_scale is None or result.index_cache_scale.dtype is not torch.uint8:
             raise RuntimeError("attention golden did not preserve the E8M0 index-cache scale ABI")
     if ratio and mode != "full":
-        if not torch.equal(result.compressed_cache, values["compressed_cache"]):
+        if not torch.equal(
+            result.compressed_cache.view(torch.uint8),
+            values["compressed_cache"].view(torch.uint8),
+        ):
             raise RuntimeError("a non-owner attention mode modified the compressed cache")
         if not torch.equal(
             result.compressed_cache_scale.view(torch.uint8),
@@ -134,7 +144,10 @@ def run_attention_golden(golden_fn: Callable[..., object], ratio: int, mode: str
         ):
             raise RuntimeError("a non-owner attention mode modified compressed-cache scales")
     if mode == "reindex":
-        if not torch.equal(result.index_cache, values["index_cache"]):
+        if not torch.equal(
+            result.index_cache.view(torch.uint8),
+            values["index_cache"].view(torch.uint8),
+        ):
             raise RuntimeError("reindex attention modified the source index cache")
         if not torch.equal(result.index_cache_scale, values["index_cache_scale"]):
             raise RuntimeError("reindex attention modified source index-cache scales")

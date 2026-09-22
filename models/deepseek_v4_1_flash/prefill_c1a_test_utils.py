@@ -185,6 +185,11 @@ def make_fixture_values(token_count: int, case_name: str) -> dict[str, torch.Ten
         group_size=C.INDEX_CACHE_GROUP,
         scale_format="e8m0",
     )
+    from models.deepseek_v4_1_flash._fp4_abi import as_fp4e2m1x2_payload
+
+    # Device kernels annotate pl.FP4E2M1X2; keep the host packed carrier.
+    compressed_cache = as_fp4e2m1x2_payload(compressed_cache)
+    index_cache = as_fp4e2m1x2_payload(index_cache)
     index_cache_scale = index_cache_scale.view(torch.float8_e8m0fnu)
 
     angles = (compressed_lens - 1).to(torch.float32).unsqueeze(1)
